@@ -121,16 +121,19 @@ class AkshareSource(DataSource):
             df = ak.stock_financial_abstract_ths(symbol=symbol)
             df["symbol"] = symbol
             return df
-        except Exception as e:
-            logger.warning(f"[akshare] 获取财务摘要失败(同花顺): {e}, 尝试备用接口")
+        except (ConnectionError, TimeoutError, OSError) as e:
+            logger.warning(f"[akshare] 获取财务摘要网络失败(同花顺): {e}, 尝试备用接口")
             # 备用: 使用 stock_financial_analysis_indicator
             try:
                 df = ak.stock_financial_analysis_indicator(symbol=symbol)
                 df["symbol"] = symbol
                 return df
-            except Exception as e2:
-                logger.error(f"[akshare] 获取财务摘要失败: {e2}")
+            except (ConnectionError, TimeoutError, OSError) as e2:
+                logger.error(f"[akshare] 获取财务摘要网络失败: {e2}")
                 return pd.DataFrame()
+        except Exception as e:
+            logger.error(f"[akshare] 获取财务摘要失败: {e}")
+            raise
 
     def get_sector_list(self) -> pd.DataFrame:
         logger.debug("[akshare] 获取行业板块列表")

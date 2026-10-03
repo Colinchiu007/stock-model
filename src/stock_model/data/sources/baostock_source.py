@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import threading
+from datetime import datetime
 from typing import Optional
 
 import baostock as bs
@@ -314,11 +315,12 @@ class BaostockSource(DataSource):
 
         # baostock的K线数据支持估值字段: peTTM, pbMRQ, psTTM, pcfNcfTTM
         fields = "date,peTTM,pbMRQ,psTTM,pcfNcfTTM"
+        today = datetime.now().strftime("%Y-%m-%d")
         rs = bs.query_history_k_data_plus(
             code=bs_symbol,
             fields=fields,
             start_date="2020-01-01",
-            end_date="2099-12-31",
+            end_date=today,
             frequency="d",
             adjustflag="3",
         )
@@ -368,8 +370,16 @@ class BaostockSource(DataSource):
         bs_symbol = self._convert_symbol(symbol)
         logger.debug(f"[baostock] 获取财务摘要: {bs_symbol}")
 
+        # 动态计算最近可用的年份和季度
+        now = datetime.now()
+        # 如果当前月份<=4月，上年Q4数据可能尚未发布，使用前年Q4
+        if now.month <= 4:
+            default_year = now.year - 2
+        else:
+            default_year = now.year - 1
+
         # 获取盈利数据(roeAvg, npMargin, gpMargin, netProfit, epsTTM等)
-        rs = bs.query_profit_data(code=bs_symbol, year=2024, quarter=4)
+        rs = bs.query_profit_data(code=bs_symbol, year=default_year, quarter=4)
         if rs.error_code != "0":
             raise RuntimeError(
                 f"baostock查询盈利数据失败: {rs.error_code} {rs.error_msg}"
@@ -380,9 +390,15 @@ class BaostockSource(DataSource):
             data.append(rs.get_row_data())
 
         if not data:
-            # 尝试上一年数据
-            rs = bs.query_profit_data(code=bs_symbol, year=2023, quarter=4)
+            # 尝试前一年数据
+            fallback_year = default_year - 1
+            logger.debug(f"[baostock] {default_year}年Q4无数据，尝试{fallback_year}年")
+            rs = bs.query_profit_data(code=bs_symbol, year=fallback_year, quarter=4)
             if rs.error_code != "0":
+                logger.warning(
+                    f"[baostock] 查询{fallback_year}年盈利数据也失败: "
+                    f"{rs.error_code} {rs.error_msg}"
+                )
                 return pd.DataFrame()
             while rs.next():
                 data.append(rs.get_row_data())
