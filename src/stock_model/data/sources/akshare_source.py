@@ -85,6 +85,53 @@ class AkshareSource(DataSource):
         logger.debug(f"[akshare] 获取股票信息: {symbol}")
         return ak.stock_individual_info_em(symbol=symbol)
 
+    def get_valuation(self, symbol: str) -> pd.DataFrame:
+        """获取估值数据(PE/PB/PS/ROE等)
+
+        使用 ak.stock_a_indicator_lg 获取个股指标数据。
+        """
+        logger.debug(f"[akshare] 获取估值数据: {symbol}")
+        df = ak.stock_a_indicator_lg(symbol=symbol)
+        # 标准化列名
+        column_map = {
+            "trade_date": "date",
+            "pe": "pe",
+            "pe_ttm": "pe_ttm",
+            "pb": "pb",
+            "ps": "ps",
+            "ps_ttm": "ps_ttm",
+            "dv_ratio": "dv_ratio",
+            "dv_ttm": "dv_ttm",
+            "total_mv": "total_mv",
+        }
+        df = df.rename(columns=column_map)
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.set_index("date")
+        df["symbol"] = symbol
+        return df
+
+    def get_financial_summary(self, symbol: str) -> pd.DataFrame:
+        """获取财务摘要数据
+
+        使用 ak.stock_financial_abstract_ths 获取同花顺财务摘要。
+        """
+        logger.debug(f"[akshare] 获取财务摘要: {symbol}")
+        try:
+            df = ak.stock_financial_abstract_ths(symbol=symbol)
+            df["symbol"] = symbol
+            return df
+        except Exception as e:
+            logger.warning(f"[akshare] 获取财务摘要失败(同花顺): {e}, 尝试备用接口")
+            # 备用: 使用 stock_financial_analysis_indicator
+            try:
+                df = ak.stock_financial_analysis_indicator(symbol=symbol)
+                df["symbol"] = symbol
+                return df
+            except Exception as e2:
+                logger.error(f"[akshare] 获取财务摘要失败: {e2}")
+                return pd.DataFrame()
+
     def get_sector_list(self) -> pd.DataFrame:
         logger.debug("[akshare] 获取行业板块列表")
         return ak.stock_board_industry_name_em()

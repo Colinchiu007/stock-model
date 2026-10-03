@@ -6,6 +6,9 @@
   - StockDataFetcher 数据源创建
   - 自动降级机制 (mock测试)
   - 缓存机制 (缓存键/缓存命中/缓存过期/缓存禁用)
+  - 估值数据获取 (get_valuation)
+  - 财务摘要获取 (get_financial_summary)
+  - DataSource基类新增抽象方法
 """
 
 import pytest
@@ -480,3 +483,149 @@ class TestCacheIntegration:
         fetcher._storage.cache_get_with_ttl.assert_called_once()
         call_args = fetcher._storage.cache_get_with_ttl.call_args
         assert call_args[0][1] == 1800
+
+
+# ============================================================
+# 估值数据获取测试
+# ============================================================
+
+class TestValuationFallback:
+    """估值数据获取自动降级测试"""
+
+    def _make_fetcher(self):
+        """创建mock fetcher用于降级测试"""
+        fetcher = object.__new__(StockDataFetcher)
+        fetcher.settings = MagicMock()
+        fetcher.source = "akshare"
+        fetcher._source_instance = MagicMock()
+        fetcher._fallback_instance = MagicMock()
+        fetcher._storage = MagicMock()
+        fetcher._cache_enabled = False
+        fetcher._cache_ttl = 3600
+        return fetcher
+
+    def test_valuation_primary_success(self):
+        """主数据源获取估值数据成功"""
+        fetcher = self._make_fetcher()
+        valuation_df = pd.DataFrame(
+            {"pe_ttm": [15.0], "pb": [2.0]},
+            index=pd.to_datetime(["2024-01-01"]),
+        )
+        fetcher._source_instance.get_valuation.return_value = valuation_df
+
+        result = fetcher._execute_with_fallback("get_valuation", "000001")
+        assert len(result) == 1
+        fetcher._source_instance.get_valuation.assert_called_once_with("000001")
+        fetcher._fallback_instance.get_valuation.assert_not_called()
+
+    def test_valuation_fallback_on_connection_error(self):
+        """主数据源连接错误时自动降级到备选"""
+        fetcher = self._make_fetcher()
+        fetcher._source_instance.get_valuation.side_effect = ConnectionError("TLS handshake failed")
+        valuation_df = pd.DataFrame(
+            {"pe_ttm": [15.0], "pb": [2.0]},
+            index=pd.to_datetime(["2024-01-01"]),
+        )
+        fetcher._fallback_instance.get_valuation.return_value = valuation_df
+
+        result = fetcher._execute_with_fallback("get_valuation", "000001")
+        assert len(result) == 1
+        fetcher._fallback_instance.get_valuation.assert_called_once_with("000001")
+
+    def test_valuation_both_fail_raises(self):
+        """两个数据源都失败时抛出RuntimeError"""
+        fetcher = self._make_fetcher()
+        fetcher._source_instance.get_valuation.side_effect = ConnectionError("failed")
+        fetcher._fallback_instance.get_valuation.side_effect = ConnectionError("also failed")
+
+        with pytest.raises(RuntimeError, match="数据获取失败"):
+            fetcher._execute_with_fallback("get_valuation", "000001")
+
+
+# ============================================================
+# 财务摘要获取测试
+# ============================================================
+
+class TestFinancialSummaryFallback:
+    """财务摘要获取自动降级测试"""
+
+    def _make_fetcher(self):
+        """创建mock fetcher"""
+        fetcher = object.__new__(StockDataFetcher)
+        fetcher.settings = MagicMock()
+        fetcher.source = "akshare"
+        fetcher._source_instance = MagicMock()
+        fetcher._fallback_instance = MagicMock()
+        fetcher._storage = MagicMock()
+        fetcher._cache_enabled = False
+        fetcher._cache_ttl = 3600
+        return fetcher
+
+    def test_financial_summary_primary_success(self):
+        """主数据源获取财务摘要成功"""
+        fetcher = self._make_fetcher()
+        summary_df = pd.DataFrame(
+            {"roeAvg": [12.5], "npMargin": [15.0]},
+            index=[0],
+        )
+        fetcher._source_instance.get_financial_summary.return_value = summary_df
+
+        result = fetcher._execute_with_fallback("get_financial_summary", "000001")
+        assert len(result) == 1
+        fetcher._source_instance.get_financial_summary.assert_called_once_with("000001")
+
+    def test_financial_summary_fallback_on_error(self):
+        """主数据源失败时自动降级"""
+        fetcher = self._make_fetcher()
+        fetcher._source_instance.get_financial_summary.side_effect = ConnectionError("timeout")
+        summary_df = pd.DataFrame(
+            {"roeAvg": [10.0], "npMargin": [12.0]},
+            index=[0],
+        )
+        fetcher._fallback_instance.get_financial_summary.return_value = summary_df
+
+        result = fetcher._execute_with_fallback("get_financial_summary", "000001")
+        assert len(result) == 1
+        fetcher._fallback_instance.get_financial_summary.assert_called_once_with("000001")
+
+
+# ============================================================
+# DataSource基类新增抽象方法测试
+# ============================================================
+
+class TestDataSourceAbstractMethods:
+    """DataSource基类新增抽象方法验证"""
+
+    def test_get_valuation_is_abstract(self):
+        """get_valuation是抽象方法，子类必须实现"""
+        # AkshareSource和BostockSource都已实现，不会报错
+        assert hasattr(AkshareSource, "get_valuation")
+        assert hasattr(BaostockSource, "get_valuation")
+
+    def test_get_financial_summary_is_abstract(self):
+        """get_financial_summary是抽象方法，子类必须实现"""
+        assert hasattr(AkshareSource, "get_financial_summary")
+        assert hasattr(BaostockSource, "get_financial_summary")
+
+    def test_incomplete_subclass_raises_type_error(self):
+        """不完整的子类无法实例化"""
+        class IncompleteSource(DataSource):
+            name = "incomplete"
+            def get_daily(self, symbol, start_date=None, end_date=None, adjust="qfq"):
+                pass
+            def get_weekly(self, symbol, start_date=None, end_date=None, adjust="qfq"):
+                pass
+            def get_monthly(self, symbol, start_date=None, end_date=None, adjust="qfq"):
+                pass
+            def get_realtime(self, symbol):
+                pass
+            def get_stock_info(self, symbol):
+                pass
+            def get_sector_list(self):
+                pass
+            def get_sector_stocks(self, sector):
+                pass
+            # 缺少 get_valuation 和 get_financial_summary
+
+        with pytest.raises(TypeError):
+            IncompleteSource()

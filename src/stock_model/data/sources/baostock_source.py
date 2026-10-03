@@ -303,6 +303,97 @@ class BaostockSource(DataSource):
         df = pd.DataFrame(data, columns=rs.fields)
         return df
 
+    def get_valuation(self, symbol: str) -> pd.DataFrame:
+        """获取估值数据(PE/PB/PS等)
+
+        使用 baostock 的 query_history_k_data_plus 获取含估值指标的数据。
+        baostock K线数据支持 peTTM/pbMRQ/psTTM 等字段。
+        """
+        bs_symbol = self._convert_symbol(symbol)
+        logger.debug(f"[baostock] 获取估值数据: {bs_symbol}")
+
+        # baostock的K线数据支持估值字段: peTTM, pbMRQ, psTTM, pcfNcfTTM
+        fields = "date,peTTM,pbMRQ,psTTM,pcfNcfTTM"
+        rs = bs.query_history_k_data_plus(
+            code=bs_symbol,
+            fields=fields,
+            start_date="2020-01-01",
+            end_date="2099-12-31",
+            frequency="d",
+            adjustflag="3",
+        )
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"baostock查询估值数据失败: {rs.error_code} {rs.error_msg}"
+            )
+
+        data = []
+        while rs.next():
+            data.append(rs.get_row_data())
+
+        if not data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data, columns=rs.fields)
+
+        # 标准化列名
+        column_map = {
+            "peTTM": "pe_ttm",
+            "pbMRQ": "pb",
+            "psTTM": "ps_ttm",
+            "pcfNcfTTM": "pcf_ttm",
+        }
+        df = df.rename(columns=column_map)
+
+        # 转换数值类型
+        numeric_cols = ["pe_ttm", "pb", "ps_ttm", "pcf_ttm"]
+        for col in numeric_cols:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        # 设置日期索引
+        if "date" in df.columns:
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.set_index("date")
+
+        df["symbol"] = symbol
+        return df
+
+    def get_financial_summary(self, symbol: str) -> pd.DataFrame:
+        """获取财务摘要数据
+
+        使用 baostock 的 query_profit_data 获取盈利数据，
+        query_operation_data 获取运营数据。
+        """
+        bs_symbol = self._convert_symbol(symbol)
+        logger.debug(f"[baostock] 获取财务摘要: {bs_symbol}")
+
+        # 获取盈利数据(roeAvg, npMargin, gpMargin, netProfit, epsTTM等)
+        rs = bs.query_profit_data(code=bs_symbol, year=2024, quarter=4)
+        if rs.error_code != "0":
+            raise RuntimeError(
+                f"baostock查询盈利数据失败: {rs.error_code} {rs.error_msg}"
+            )
+
+        data = []
+        while rs.next():
+            data.append(rs.get_row_data())
+
+        if not data:
+            # 尝试上一年数据
+            rs = bs.query_profit_data(code=bs_symbol, year=2023, quarter=4)
+            if rs.error_code != "0":
+                return pd.DataFrame()
+            while rs.next():
+                data.append(rs.get_row_data())
+
+        if not data:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data, columns=rs.fields)
+        df["symbol"] = symbol
+        return df
+
     @staticmethod
     def _normalize(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
         """标准化baostock数据格式，与akshare输出格式对齐"""

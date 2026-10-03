@@ -65,6 +65,28 @@ class DataSource(ABC):
         """获取股票基本信息"""
 
     @abstractmethod
+    def get_valuation(self, symbol: str) -> pd.DataFrame:
+        """获取估值数据(PE/PB/PS/ROE等)
+
+        Args:
+            symbol: 股票代码, 如 "000001"
+
+        Returns:
+            DataFrame with columns: date, pe, pb, ps, roe 等
+        """
+
+    @abstractmethod
+    def get_financial_summary(self, symbol: str) -> pd.DataFrame:
+        """获取财务摘要数据
+
+        Args:
+            symbol: 股票代码, 如 "000001"
+
+        Returns:
+            DataFrame with financial summary data
+        """
+
+    @abstractmethod
     def get_sector_list(self) -> pd.DataFrame:
         """获取行业板块列表"""
 

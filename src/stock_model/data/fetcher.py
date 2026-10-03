@@ -4,14 +4,16 @@
 支持多种数据源:
   - akshare: 免费A股数据 (默认, 基于东方财富)
   - baostock: 免费A股数据 (稳定备选, 基于证券宝, 不受反爬影响)
-  - tushare: 需要Token (专业级, 待实现)
+  - tushare: 需要Token (专业级, 预留接口)
 
 功能:
   - 日线/周线/月线行情
   - 实时行情
-  - 财务数据
+  - 估值数据 (PE/PB/PS/ROE等)
+  - 财务摘要
   - 板块数据
   - 自动降级: akshare失败时自动切换到baostock
+  - TTL缓存: 减少重复网络请求
 """
 
 from __future__ import annotations
@@ -345,26 +347,23 @@ class StockDataFetcher:
     def get_financial_summary(self, symbol: str) -> pd.DataFrame:
         """获取财务摘要数据
 
-        注意: baostock不支持此功能，仅akshare可用。
+        支持多数据源自动降级:
+          - akshare: 同花顺财务摘要 / 财务分析指标
+          - baostock: 盈利数据(roeAvg, npMargin等)
         """
         logger.info(f"获取财务摘要: {symbol}")
-        # 仅akshare支持，不降级
-        if isinstance(self._source_instance, AkshareSource):
-            return self._source_instance.get_stock_info(symbol)
-        raise NotImplementedError(
-            f"数据源 {self.source} 不支持财务摘要查询，请使用 akshare"
-        )
+        return self._execute_with_fallback("get_financial_summary", symbol)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def get_valuation(self, symbol: str) -> pd.DataFrame:
-        """获取估值数据(PE/PB等)
+        """获取估值数据(PE/PB/PS/ROE等)
 
-        注意: baostock不支持此功能，仅akshare可用。
+        支持多数据源自动降级:
+          - akshare: stock_a_indicator_lg (PE/PB/PS/股息率/总市值)
+          - baostock: history_k_data_plus (peTTM/pbMRQ/psTTM)
         """
         logger.info(f"获取估值数据: {symbol}")
-        raise NotImplementedError(
-            "估值数据暂不支持，请直接使用 ak.stock_a_indicator_lg()"
-        )
+        return self._execute_with_fallback("get_valuation", symbol)
 
     # ==================== 板块数据 ====================
 
