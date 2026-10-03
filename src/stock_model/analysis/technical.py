@@ -17,8 +17,14 @@ from typing import Optional
 
 import numpy as np
 import pandas as pd
-import pandas_ta as ta
 from loguru import logger
+
+try:
+    import pandas_ta as ta
+    HAS_PANDAS_TA = True
+except ImportError:
+    ta = None
+    HAS_PANDAS_TA = False
 
 from stock_model.config.settings import get_settings
 
@@ -28,6 +34,11 @@ class TechnicalAnalysis:
 
     def __init__(self):
         self.settings = get_settings().analysis
+        if not HAS_PANDAS_TA:
+            logger.warning(
+                "pandas-ta 未安装，技术指标(MACD/RSI/BOLL/ATR/OBV)不可用。"
+                "请安装: pip install stock-model[ta]"
+            )
 
     # ==================== 趋势指标 ====================
 
@@ -80,7 +91,7 @@ class TechnicalAnalysis:
         slow = slow or self.settings.macd_slow
         signal = signal or self.settings.macd_signal
 
-        macd_result = ta.macd(df["close"], fast=fast, slow=slow, signal=signal)
+        macd_result = ta.macd(df["close"], fast=fast, slow=slow, signal=signal) if HAS_PANDAS_TA else None
         if macd_result is not None:
             df = pd.concat([df, macd_result], axis=1)
 
@@ -106,7 +117,7 @@ class TechnicalAnalysis:
         df = df.copy()
         period = period or self.settings.rsi_period
 
-        rsi_result = ta.rsi(df["close"], length=period)
+        rsi_result = ta.rsi(df["close"], length=period) if HAS_PANDAS_TA else None
         if rsi_result is not None:
             df[f"rsi{period}"] = rsi_result
 
@@ -165,7 +176,7 @@ class TechnicalAnalysis:
         period = period or self.settings.boll_period
         std_dev = std_dev or self.settings.boll_std
 
-        boll_result = ta.bbands(df["close"], length=period, std=std_dev)
+        boll_result = ta.bbands(df["close"], length=period, std=std_dev) if HAS_PANDAS_TA else None
         if boll_result is not None:
             df = pd.concat([df, boll_result], axis=1)
 
@@ -174,7 +185,7 @@ class TechnicalAnalysis:
     def atr(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
         """计算ATR (真实波动范围)"""
         df = df.copy()
-        atr_result = ta.atr(df["high"], df["low"], df["close"], length=period)
+        atr_result = ta.atr(df["high"], df["low"], df["close"], length=period) if HAS_PANDAS_TA else None
         if atr_result is not None:
             df[f"atr{period}"] = atr_result
         return df
@@ -184,7 +195,7 @@ class TechnicalAnalysis:
     def obv(self, df: pd.DataFrame) -> pd.DataFrame:
         """计算OBV (能量潮)"""
         df = df.copy()
-        df["obv"] = ta.obv(df["close"], df["volume"])
+        df["obv"] = ta.obv(df["close"], df["volume"]) if HAS_PANDAS_TA else np.nan
         return df
 
     def volume_ma(self, df: pd.DataFrame, periods: list[int] = [5, 10, 20]) -> pd.DataFrame:
