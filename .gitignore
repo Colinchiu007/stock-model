@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# JoyCode
+.joycode/
+
+# Data (不提交数据文件)
+data/raw/
+data/processed/
+data/cache/
+*.csv
+*.xlsx
+*.parquet
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+
+# Logs
+logs/
+*.log
+
+# Model artifacts (后期量化模型)
+models/checkpoints/
+models/trained/
+
+# Pytest
+.pytest_cache/
