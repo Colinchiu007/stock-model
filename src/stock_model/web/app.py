@@ -7,16 +7,13 @@ Web Dashboard 应用
 
 from __future__ import annotations
 
-import json
-import os
 from datetime import datetime
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from loguru import logger
 
 
-def create_app(config: Optional[Dict] = None) -> Any:
+def create_app(config: dict | None = None) -> Any:
     """创建 FastAPI 应用实例
 
     Args:
@@ -30,7 +27,7 @@ def create_app(config: Optional[Dict] = None) -> Any:
     """
     try:
         from fastapi import FastAPI, HTTPException
-        from fastapi.responses import HTMLResponse, JSONResponse
+        from fastapi.responses import HTMLResponse
         from pydantic import BaseModel
 
         app = FastAPI(
@@ -50,14 +47,14 @@ def create_app(config: Optional[Dict] = None) -> Any:
         class BacktestRequest(BaseModel):
             symbol: str
             strategy_name: str = "ma_cross"
-            start_date: Optional[str] = None
-            end_date: Optional[str] = None
+            start_date: str | None = None
+            end_date: str | None = None
             initial_cash: float = 100000.0
 
         # ---- 状态存储(内存, 生产环境应使用数据库) ----
 
-        _signals: List[Dict] = []
-        _backtest_results: List[Dict] = []
+        _signals: list[dict] = []
+        _backtest_results: list[dict] = []
 
         # ---- API路由 ----
 
@@ -159,9 +156,13 @@ def create_app(config: Optional[Dict] = None) -> Any:
 
                 opt_func = method_map.get(method, optimizer.equal_weight)
                 if method in ("risk_parity", "min_variance", "mean_variance"):
-                    portfolio = opt_func(returns=returns_dict, prices=prices_dict, total_value=100000)
+                    portfolio = opt_func(
+                        returns=returns_dict, prices=prices_dict, total_value=100000
+                    )
                 else:
-                    portfolio = opt_func(symbols=symbol_list, prices=prices_dict, total_value=100000)
+                    portfolio = opt_func(
+                        symbols=symbol_list, prices=prices_dict, total_value=100000
+                    )
 
                 return {
                     "method": method,
@@ -201,12 +202,10 @@ def create_app(config: Optional[Dict] = None) -> Any:
 
     except ImportError:
         logger.warning(
-            "fastapi 或 uvicorn 未安装，Web Dashboard 不可用。"
-            "请安装: pip install stock-model[web]"
+            "fastapi 或 uvicorn 未安装，Web Dashboard 不可用。请安装: pip install stock-model[web]"
         )
         raise ImportError(
-            "Web Dashboard 需要 fastapi 和 uvicorn。"
-            "请安装: pip install stock-model[web]"
+            "Web Dashboard 需要 fastapi 和 uvicorn。请安装: pip install stock-model[web]"
         )
 
 

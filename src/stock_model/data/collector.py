@@ -7,9 +7,8 @@
 
 from __future__ import annotations
 
-import time
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable, Dict, List, Optional
 
 import pandas as pd
 from loguru import logger
@@ -29,18 +28,18 @@ class AutoDataCollector:
         collector.collect_now()  # 手动触发
     """
 
-    def __init__(self, fetcher: Optional[StockDataFetcher] = None):
+    def __init__(self, fetcher: StockDataFetcher | None = None):
         self._fetcher = fetcher or StockDataFetcher()
-        self._watchlist: List[str] = []
-        self._callbacks: List[Callable] = []
+        self._watchlist: list[str] = []
+        self._callbacks: list[Callable] = []
         self._scheduler = None
         self._running = False
         self._collect_count = 0
         self._error_count = 0
-        self._last_collect_time: Optional[datetime] = None
+        self._last_collect_time: datetime | None = None
 
     @property
-    def watchlist(self) -> List[str]:
+    def watchlist(self) -> list[str]:
         """当前监控列表"""
         return self._watchlist.copy()
 
@@ -50,7 +49,7 @@ class AutoDataCollector:
         return self._running
 
     @property
-    def stats(self) -> Dict[str, object]:
+    def stats(self) -> dict[str, object]:
         """采集统计"""
         return {
             "collect_count": self._collect_count,
@@ -59,7 +58,7 @@ class AutoDataCollector:
             "watchlist_size": len(self._watchlist),
         }
 
-    def add_watchlist(self, symbols: List[str]) -> None:
+    def add_watchlist(self, symbols: list[str]) -> None:
         """添加监控股票
 
         Args:
@@ -71,7 +70,7 @@ class AutoDataCollector:
                 self._watchlist.append(symbol)
                 logger.info(f"添加监控: {symbol}")
 
-    def remove_watchlist(self, symbols: List[str]) -> None:
+    def remove_watchlist(self, symbols: list[str]) -> None:
         """移除监控股票"""
         for symbol in symbols:
             if symbol in self._watchlist:
@@ -94,14 +93,14 @@ class AutoDataCollector:
         """
         self._callbacks.append(("error", callback))
 
-    def collect_now(self) -> Dict[str, pd.DataFrame]:
+    def collect_now(self) -> dict[str, pd.DataFrame]:
         """立即采集所有监控股票数据
 
         Returns:
             各股票数据字典 {symbol: DataFrame}
         """
         logger.info(f"开始采集 {len(self._watchlist)} 只股票数据")
-        results: Dict[str, pd.DataFrame] = {}
+        results: dict[str, pd.DataFrame] = {}
         self._last_collect_time = datetime.now()
 
         for symbol in self._watchlist:
@@ -135,9 +134,7 @@ class AutoDataCollector:
                         except Exception as cb_err:
                             logger.warning(f"错误回调执行失败: {cb_err}")
 
-        logger.info(
-            f"采集完成: 成功={len(results)}, 失败={len(self._watchlist) - len(results)}"
-        )
+        logger.info(f"采集完成: 成功={len(results)}, 失败={len(self._watchlist) - len(results)}")
         return results
 
     def start(self, interval_minutes: int = 30) -> None:
@@ -165,10 +162,7 @@ class AutoDataCollector:
             logger.info(f"定时采集已启动，间隔={interval_minutes}分钟")
 
         except ImportError:
-            logger.warning(
-                "apscheduler 未安装，定时采集不可用。"
-                "请安装: pip install apscheduler"
-            )
+            logger.warning("apscheduler 未安装，定时采集不可用。请安装: pip install apscheduler")
             logger.info("可使用 collect_now() 手动触发采集")
 
     def stop(self) -> None:

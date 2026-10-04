@@ -8,14 +8,14 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import pandas as pd
 from loguru import logger
 
-from stock_model.strategy.base import ActionType, BaseStrategy, StrategyResult
+from stock_model.strategy.base import BaseStrategy, StrategyResult
 
 
 @dataclass
@@ -25,12 +25,12 @@ class StrategyParams:
     子类应定义具体策略参数字段。
     """
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """转换为字典"""
         return {k: v for k, v in vars(self).items() if not k.startswith("_")}
 
     @classmethod
-    def from_dict(cls, params: Dict[str, Any]) -> StrategyParams:
+    def from_dict(cls, params: dict[str, Any]) -> StrategyParams:
         """从字典创建"""
         return cls(**params)
 
@@ -51,7 +51,7 @@ class QuantStrategy(BaseStrategy):
 
     params_class: type = StrategyParams
 
-    def __init__(self, params: Optional[StrategyParams] = None):
+    def __init__(self, params: StrategyParams | None = None):
         self._params = params or self.params_class()
 
     @property
@@ -73,7 +73,7 @@ class QuantStrategy(BaseStrategy):
 
     def optimize(
         self,
-        param_grid: Dict[str, List[Any]],
+        param_grid: dict[str, list[Any]],
         df: pd.DataFrame,
         symbol: str = "test",
         metric: str = "total_return",
@@ -113,10 +113,10 @@ class QuantStrategy(BaseStrategy):
                 if score > best_score:
                     best_score = score
                     best_params = combo.copy()
-                    logger.debug(f"  [{i+1}/{total}] 新最优: {combo}, {metric}={score:.4f}")
+                    logger.debug(f"  [{i + 1}/{total}] 新最优: {combo}, {metric}={score:.4f}")
 
             except Exception as e:
-                logger.warning(f"  [{i+1}/{total}] 参数组合 {combo} 回测失败: {e}")
+                logger.warning(f"  [{i + 1}/{total}] 参数组合 {combo} 回测失败: {e}")
                 continue
 
         if best_params:
@@ -129,7 +129,7 @@ class QuantStrategy(BaseStrategy):
         return self._params
 
     @staticmethod
-    def _generate_combinations(param_grid: Dict[str, List[Any]]) -> List[Dict[str, Any]]:
+    def _generate_combinations(param_grid: dict[str, list[Any]]) -> list[dict[str, Any]]:
         """生成参数组合（笛卡尔积）"""
         keys = list(param_grid.keys())
         values = list(param_grid.values())

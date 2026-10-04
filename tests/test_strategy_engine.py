@@ -6,19 +6,18 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from stock_model.strategy.base import ActionType, BaseStrategy, StrategyResult
+from stock_model.strategy.base import ActionType, StrategyResult
 from stock_model.strategy.engine import (
     BacktestEngine,
     BacktestResult,
     StrategyEngine,
-    StrategyPerformance,
     Trade,
 )
 from stock_model.strategy.manual import ManualStrategy
 from stock_model.strategy.quant_strategy import QuantStrategy, StrategyParams
 
-
 # --- 测试辅助 ---
+
 
 def _make_test_df(days: int = 120, trend: str = "up") -> pd.DataFrame:
     """生成测试用行情数据"""
@@ -88,6 +87,7 @@ class SimpleQuantStrategy(QuantStrategy):
 
 # --- Trade 测试 ---
 
+
 class TestTrade:
     def test_trade_amount(self):
         trade = Trade(
@@ -113,6 +113,7 @@ class TestTrade:
 
 
 # --- BacktestResult 测试 ---
+
 
 class TestBacktestResult:
     def test_total_return_positive(self):
@@ -144,6 +145,7 @@ class TestBacktestResult:
 
 
 # --- BacktestEngine 测试 ---
+
 
 class TestBacktestEngine:
     def test_backtest_with_manual_strategy(self):
@@ -183,8 +185,12 @@ class TestBacktestEngine:
         result = engine.run(strategy, df, "000001")
 
         expected_keys = [
-            "total_return", "annual_return", "sharpe", "sortino",
-            "max_drawdown", "volatility",
+            "total_return",
+            "annual_return",
+            "sharpe",
+            "sortino",
+            "max_drawdown",
+            "volatility",
         ]
         for key in expected_keys:
             assert key in result.metrics, f"缺少指标: {key}"
@@ -206,6 +212,7 @@ class TestBacktestEngine:
 
 
 # --- QuantStrategy 测试 ---
+
 
 class TestQuantStrategy:
     def test_params_default(self):
@@ -242,6 +249,7 @@ class TestQuantStrategy:
 
 
 # --- StrategyEngine 测试 ---
+
 
 class TestStrategyEngine:
     def test_register_and_list(self):

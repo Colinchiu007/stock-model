@@ -10,7 +10,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 import pandas as pd
 from loguru import logger
@@ -18,6 +17,7 @@ from loguru import logger
 
 class ActionType(str, Enum):
     """操作类型"""
+
     BUY = "buy"
     SELL = "sell"
     HOLD = "hold"
@@ -31,8 +31,8 @@ class StrategyResult:
     action: ActionType
     confidence: float  # 0.0 - 1.0
     reason: str = ""
-    target_price: Optional[float] = None
-    stop_loss: Optional[float] = None
+    target_price: float | None = None
+    stop_loss: float | None = None
     position_pct: float = 0.0  # 建议仓位比例 0-100
     metadata: dict = field(default_factory=dict)
 

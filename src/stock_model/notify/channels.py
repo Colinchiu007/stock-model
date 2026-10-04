@@ -10,7 +10,6 @@ import json
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
 
 from loguru import logger
 
@@ -34,9 +33,9 @@ class ConsoleChannel(NotificationChannel):
 
     def send(self, message: str, result: StrategyResult) -> None:
         """打印信号到控制台"""
-        print(f"\n{'='*40}")
+        print(f"\n{'=' * 40}")
         print(message)
-        print(f"{'='*40}\n")
+        print(f"{'=' * 40}\n")
 
 
 class FileChannel(NotificationChannel):
@@ -80,7 +79,7 @@ class WebhookChannel(NotificationChannel):
     def __init__(
         self,
         url: str,
-        headers: Optional[Dict[str, str]] = None,
+        headers: dict[str, str] | None = None,
         timeout: int = 10,
     ):
         self.url = url
@@ -98,9 +97,7 @@ class WebhookChannel(NotificationChannel):
             import httpx
 
             with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(
-                    self.url, json=payload, headers=self.headers
-                )
+                response = client.post(self.url, json=payload, headers=self.headers)
                 if response.status_code >= 400:
                     logger.warning(
                         f"Webhook返回错误: status={response.status_code}, "
@@ -110,9 +107,6 @@ class WebhookChannel(NotificationChannel):
                     logger.debug(f"Webhook发送成功: status={response.status_code}")
 
         except ImportError:
-            logger.warning(
-                "httpx 未安装，Webhook推送不可用。"
-                "请安装: pip install httpx"
-            )
+            logger.warning("httpx 未安装，Webhook推送不可用。请安装: pip install httpx")
         except Exception as e:
             logger.error(f"Webhook发送失败: {e}")

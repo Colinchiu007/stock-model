@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -23,7 +22,7 @@ class QualityIssue:
     category: str  # "missing", "outlier", "staleness", "schema"
     message: str
     symbol: str = ""
-    details: Dict = field(default_factory=dict)
+    details: dict = field(default_factory=dict)
 
     def __str__(self) -> str:
         return f"[{self.severity.upper()}] {self.category}: {self.message}"
@@ -34,7 +33,7 @@ class QualityReport:
     """数据质量报告"""
 
     symbol: str
-    issues: List[QualityIssue] = field(default_factory=list)
+    issues: list[QualityIssue] = field(default_factory=list)
     score: float = 100.0  # 0-100, 100=完美
 
     @property
@@ -77,9 +76,7 @@ class DataQualityMonitor:
         self.staleness_hours = staleness_hours
         self.max_missing_pct = max_missing_pct
 
-    def check(
-        self, df: pd.DataFrame, symbol: str = ""
-    ) -> QualityReport:
+    def check(self, df: pd.DataFrame, symbol: str = "") -> QualityReport:
         """执行全面数据质量检查
 
         Args:
@@ -123,9 +120,7 @@ class DataQualityMonitor:
 
         return report
 
-    def _check_missing(
-        self, df: pd.DataFrame, symbol: str, report: QualityReport
-    ) -> None:
+    def _check_missing(self, df: pd.DataFrame, symbol: str, report: QualityReport) -> None:
         """检查缺失值"""
         total_cells = df.shape[0] * df.shape[1]
         if total_cells == 0:
@@ -154,9 +149,7 @@ class DataQualityMonitor:
                 )
             )
 
-    def _check_outlier(
-        self, df: pd.DataFrame, symbol: str, report: QualityReport
-    ) -> None:
+    def _check_outlier(self, df: pd.DataFrame, symbol: str, report: QualityReport) -> None:
         """检查异常值(基于Z-score)"""
         numeric_cols = df.select_dtypes(include=[np.number]).columns
 
@@ -185,9 +178,7 @@ class DataQualityMonitor:
                     )
                 )
 
-    def _check_staleness(
-        self, df: pd.DataFrame, symbol: str, report: QualityReport
-    ) -> None:
+    def _check_staleness(self, df: pd.DataFrame, symbol: str, report: QualityReport) -> None:
         """检查数据新鲜度"""
         if not isinstance(df.index, pd.DatetimeIndex):
             report.issues.append(
@@ -208,19 +199,23 @@ class DataQualityMonitor:
         age = now - latest_date.to_pydatetime()
 
         if age > timedelta(hours=self.staleness_hours):
+            severity = "warning" if age > timedelta(hours=self.staleness_hours * 2) else "info"
             report.issues.append(
                 QualityIssue(
-                    severity="warning" if age > timedelta(hours=self.staleness_hours * 2) else "info",
+                    severity=severity,
                     category="staleness",
-                    message=f"数据过期: 最新日期={latest_date.strftime('%Y-%m-%d')}, 过期{age.days}天",
+                    message=(
+                        f"数据过期: 最新日期={latest_date.strftime('%Y-%m-%d')}, 过期{age.days}天"
+                    ),
                     symbol=symbol,
-                    details={"latest_date": str(latest_date), "age_hours": age.total_seconds() / 3600},
+                    details={
+                        "latest_date": str(latest_date),
+                        "age_hours": age.total_seconds() / 3600,
+                    },
                 )
             )
 
-    def _check_schema(
-        self, df: pd.DataFrame, symbol: str, report: QualityReport
-    ) -> None:
+    def _check_schema(self, df: pd.DataFrame, symbol: str, report: QualityReport) -> None:
         """检查数据Schema"""
         required_cols = {"close"}
         missing_cols = required_cols - set(df.columns)

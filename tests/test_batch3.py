@@ -164,9 +164,7 @@ class TestPortfolioOptimizer:
         from stock_model.portfolio.optimizer import PortfolioOptimizer
 
         opt = PortfolioOptimizer()
-        portfolio = opt.equal_weight(
-            symbols=["000001"], prices={"000001": 10.0}, total_value=10000
-        )
+        portfolio = opt.equal_weight(symbols=["000001"], prices={"000001": 10.0}, total_value=10000)
         assert len(portfolio.weights) == 1
         assert portfolio.weights[0].weight == 1.0
         assert portfolio.weights[0].shares == 1000
@@ -317,6 +315,6 @@ class TestWebDashboard:
     def test_web_module_init(self):
         """验证模块可导入"""
         try:
-            from stock_model.web import create_app
+            import stock_model.web  # noqa: F401
         except ImportError:
             pass  # fastapi未安装时正常

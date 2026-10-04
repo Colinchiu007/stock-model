@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
 
 import pandas as pd
 
@@ -20,8 +19,8 @@ class DataSource(ABC):
     def get_daily(
         self,
         symbol: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         """获取日线行情数据
@@ -40,8 +39,8 @@ class DataSource(ABC):
     def get_weekly(
         self,
         symbol: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         """获取周线行情数据"""
@@ -50,8 +49,8 @@ class DataSource(ABC):
     def get_monthly(
         self,
         symbol: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         """获取月线行情数据"""

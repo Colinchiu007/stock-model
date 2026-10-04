@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import threading
 from datetime import datetime
-from typing import Optional
 
 import baostock as bs
 import pandas as pd
@@ -49,9 +48,7 @@ class BaostockSource(DataSource):
             if not BaostockSource._logged_in:
                 lg = bs.login()
                 if lg.error_code != "0":
-                    raise ConnectionError(
-                        f"baostock登录失败: {lg.error_code} {lg.error_msg}"
-                    )
+                    raise ConnectionError(f"baostock登录失败: {lg.error_code} {lg.error_msg}")
                 BaostockSource._logged_in = True
                 logger.info("baostock登录成功")
 
@@ -92,7 +89,7 @@ class BaostockSource(DataSource):
             return f"sz.{symbol}"
 
     @staticmethod
-    def _normalize_date(date_str: Optional[str]) -> Optional[str]:
+    def _normalize_date(date_str: str | None) -> str | None:
         """将日期格式标准化为baostock要求的 YYYY-MM-DD 格式
 
         "20240101" -> "2024-01-01"
@@ -120,8 +117,8 @@ class BaostockSource(DataSource):
     def get_daily(
         self,
         symbol: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         bs_symbol = self._convert_symbol(symbol)
@@ -140,9 +137,7 @@ class BaostockSource(DataSource):
         )
 
         if rs.error_code != "0":
-            raise RuntimeError(
-                f"baostock查询失败: {rs.error_code} {rs.error_msg}"
-            )
+            raise RuntimeError(f"baostock查询失败: {rs.error_code} {rs.error_msg}")
 
         data = []
         while rs.next():
@@ -158,8 +153,8 @@ class BaostockSource(DataSource):
     def get_weekly(
         self,
         symbol: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         bs_symbol = self._convert_symbol(symbol)
@@ -178,9 +173,7 @@ class BaostockSource(DataSource):
         )
 
         if rs.error_code != "0":
-            raise RuntimeError(
-                f"baostock查询失败: {rs.error_code} {rs.error_msg}"
-            )
+            raise RuntimeError(f"baostock查询失败: {rs.error_code} {rs.error_msg}")
 
         data = []
         while rs.next():
@@ -195,8 +188,8 @@ class BaostockSource(DataSource):
     def get_monthly(
         self,
         symbol: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         bs_symbol = self._convert_symbol(symbol)
@@ -215,9 +208,7 @@ class BaostockSource(DataSource):
         )
 
         if rs.error_code != "0":
-            raise RuntimeError(
-                f"baostock查询失败: {rs.error_code} {rs.error_msg}"
-            )
+            raise RuntimeError(f"baostock查询失败: {rs.error_code} {rs.error_msg}")
 
         data = []
         while rs.next():
@@ -241,9 +232,7 @@ class BaostockSource(DataSource):
 
         rs = bs.query_stock_industry()
         if rs.error_code != "0":
-            raise RuntimeError(
-                f"baostock查询行业失败: {rs.error_code} {rs.error_msg}"
-            )
+            raise RuntimeError(f"baostock查询行业失败: {rs.error_code} {rs.error_msg}")
 
         data = []
         while rs.next():
@@ -264,9 +253,7 @@ class BaostockSource(DataSource):
 
         rs = bs.query_stock_industry()
         if rs.error_code != "0":
-            raise RuntimeError(
-                f"baostock查询行业失败: {rs.error_code} {rs.error_msg}"
-            )
+            raise RuntimeError(f"baostock查询行业失败: {rs.error_code} {rs.error_msg}")
 
         data = []
         while rs.next():
@@ -288,9 +275,7 @@ class BaostockSource(DataSource):
 
         rs = bs.query_stock_industry()
         if rs.error_code != "0":
-            raise RuntimeError(
-                f"baostock查询行业失败: {rs.error_code} {rs.error_msg}"
-            )
+            raise RuntimeError(f"baostock查询行业失败: {rs.error_code} {rs.error_msg}")
 
         data = []
         while rs.next():
@@ -325,9 +310,7 @@ class BaostockSource(DataSource):
             adjustflag="3",
         )
         if rs.error_code != "0":
-            raise RuntimeError(
-                f"baostock查询估值数据失败: {rs.error_code} {rs.error_msg}"
-            )
+            raise RuntimeError(f"baostock查询估值数据失败: {rs.error_code} {rs.error_msg}")
 
         data = []
         while rs.next():
@@ -381,9 +364,7 @@ class BaostockSource(DataSource):
         # 获取盈利数据(roeAvg, npMargin, gpMargin, netProfit, epsTTM等)
         rs = bs.query_profit_data(code=bs_symbol, year=default_year, quarter=4)
         if rs.error_code != "0":
-            raise RuntimeError(
-                f"baostock查询盈利数据失败: {rs.error_code} {rs.error_msg}"
-            )
+            raise RuntimeError(f"baostock查询盈利数据失败: {rs.error_code} {rs.error_msg}")
 
         data = []
         while rs.next():
@@ -431,7 +412,16 @@ class BaostockSource(DataSource):
         df = df.rename(columns=existing_map)
 
         # 转换数值类型 (baostock返回字符串)
-        numeric_cols = ["open", "high", "low", "close", "volume", "amount", "turnover", "pct_change"]
+        numeric_cols = [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "amount",
+            "turnover",
+            "pct_change",
+        ]
         for col in numeric_cols:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")

@@ -87,6 +87,9 @@ target-version = "py310"
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
 
+[tool.ruff.lint.per-file-ignores]
+"src/stock_model/web/app.py" = ["E501"]  # HTML template with inline CSS
+
 [tool.mypy]
 python_version = "3.10"
 warn_return_any = true

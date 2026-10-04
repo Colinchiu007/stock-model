@@ -24,9 +24,9 @@ jobs:
           pip install --upgrade pip
           pip install ruff mypy
       - name: Ruff check
-        run: ruff check src/ tests/ || true
+        run: ruff check src/ tests/
       - name: Ruff format check
-        run: ruff format --check src/ tests/ || true
+        run: ruff format --check src/ tests/
 
   test:
     name: Test (Python ${{ matrix.python-version }})

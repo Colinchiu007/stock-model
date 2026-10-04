@@ -8,27 +8,27 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class RiskLevel(str, Enum):
     """风险等级"""
 
-    LOW = "low"           # 低风险
-    WARNING = "warning"   # 警告
-    DANGER = "danger"     # 危险
-    CRITICAL = "critical" # 严重
+    LOW = "low"  # 低风险
+    WARNING = "warning"  # 警告
+    DANGER = "danger"  # 危险
+    CRITICAL = "critical"  # 严重
 
 
 class RiskType(str, Enum):
     """风险类型"""
 
-    DRAWDOWN = "drawdown"              # 回撤风险
-    CONCENTRATION = "concentration"    # 集中度风险
-    VOLATILITY = "volatility"          # 波动率风险
-    LIQUIDITY = "liquidity"            # 流动性风险
-    STOP_LOSS = "stop_loss"            # 止损触发
-    TAKE_PROFIT = "take_profit"        # 止盈触发
+    DRAWDOWN = "drawdown"  # 回撤风险
+    CONCENTRATION = "concentration"  # 集中度风险
+    VOLATILITY = "volatility"  # 波动率风险
+    LIQUIDITY = "liquidity"  # 流动性风险
+    STOP_LOSS = "stop_loss"  # 止损触发
+    TAKE_PROFIT = "take_profit"  # 止盈触发
     POSITION_LIMIT = "position_limit"  # 仓位限制
 
 
@@ -39,16 +39,15 @@ class RiskAlert:
     level: RiskLevel
     type: RiskType
     message: str
-    action: str = ""           # 建议行动
-    symbol: str = ""           # 相关股票代码
-    value: float = 0.0         # 当前值
-    threshold: float = 0.0     # 阈值
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    action: str = ""  # 建议行动
+    symbol: str = ""  # 相关股票代码
+    value: float = 0.0  # 当前值
+    threshold: float = 0.0  # 阈值
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
         return (
-            f"RiskAlert({self.level.value}/{self.type.value}: "
-            f"{self.message}, 建议={self.action})"
+            f"RiskAlert({self.level.value}/{self.type.value}: {self.message}, 建议={self.action})"
         )
 
 
@@ -58,10 +57,10 @@ class Position:
 
     symbol: str
     shares: int = 0
-    cost_price: float = 0.0     # 成本价
+    cost_price: float = 0.0  # 成本价
     current_price: float = 0.0  # 当前价
-    stop_loss: Optional[float] = None   # 止损价
-    take_profit: Optional[float] = None # 止盈价
+    stop_loss: float | None = None  # 止损价
+    take_profit: float | None = None  # 止盈价
 
     @property
     def market_value(self) -> float:
@@ -97,8 +96,8 @@ class PortfolioRisk:
     """组合风险概览"""
 
     total_value: float = 0.0
-    positions: List[Position] = field(default_factory=list)
-    alerts: List[RiskAlert] = field(default_factory=list)
+    positions: list[Position] = field(default_factory=list)
+    alerts: list[RiskAlert] = field(default_factory=list)
 
     @property
     def max_concentration(self) -> float:

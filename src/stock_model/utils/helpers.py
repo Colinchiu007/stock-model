@@ -31,7 +31,7 @@ def format_stock_code(symbol: str) -> str:
     # 移除前缀
     for prefix in ["SH", "SZ", "sh", "sz"]:
         if symbol.upper().startswith(prefix):
-            symbol = symbol[len(prefix):]
+            symbol = symbol[len(prefix) :]
 
     # 补零到6位
     return symbol.zfill(6)

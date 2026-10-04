@@ -5,12 +5,10 @@ Batch 2 单元测试: 自动数据采集 + 数据质量监控 + 信号推送
 import json
 import os
 import tempfile
-from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from stock_model.data.collector import AutoDataCollector
 from stock_model.data.monitor import DataQualityMonitor, QualityIssue, QualityReport
@@ -18,8 +16,8 @@ from stock_model.notify.channels import ConsoleChannel, FileChannel, WebhookChan
 from stock_model.notify.notifier import SignalNotifier
 from stock_model.strategy.base import ActionType, StrategyResult
 
-
 # --- 测试辅助 ---
+
 
 def _make_test_df(days: int = 60) -> pd.DataFrame:
     """生成测试用行情数据"""
@@ -41,6 +39,7 @@ def _make_test_df(days: int = 60) -> pd.DataFrame:
 
 
 # --- AutoDataCollector 测试 ---
+
 
 class TestAutoDataCollector:
     def test_add_watchlist(self):
@@ -115,6 +114,7 @@ class TestAutoDataCollector:
 
 # --- DataQualityMonitor 测试 ---
 
+
 class TestDataQualityMonitor:
     def test_good_data(self):
         monitor = DataQualityMonitor()
@@ -183,11 +183,13 @@ class TestDataQualityMonitor:
 
 # --- QualityIssue/QualityReport 测试 ---
 
+
 class TestQualityIssue:
     def test_str(self):
         issue = QualityIssue(severity="error", category="missing", message="缺失数据")
         assert "ERROR" in str(issue)
         assert "missing" in str(issue)
+
 
 class TestQualityReport:
     def test_has_errors(self):
@@ -211,6 +213,7 @@ class TestQualityReport:
 
 
 # --- SignalNotifier 测试 ---
+
 
 class TestSignalNotifier:
     def test_notify_with_console(self, capsys):
@@ -239,7 +242,7 @@ class TestSignalNotifier:
             )
             notifier.notify(result)
 
-            with open(filepath, "r", encoding="utf-8") as f:
+            with open(filepath, encoding="utf-8") as f:
                 lines = f.readlines()
                 assert len(lines) == 1
                 record = json.loads(lines[0])
@@ -286,6 +289,7 @@ class TestSignalNotifier:
 
 
 # --- WebhookChannel 测试 ---
+
 
 class TestWebhookChannel:
     def test_webhook_without_httpx(self):

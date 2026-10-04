@@ -7,14 +7,11 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
-import numpy as np
 import pandas as pd
 from loguru import logger
 
 from stock_model.analysis.fundamental import FundamentalAnalysis
-from stock_model.analysis.signals import SignalGenerator, SignalType, SignalStrength
+from stock_model.analysis.signals import SignalGenerator, SignalStrength, SignalType
 from stock_model.analysis.technical import TechnicalAnalysis
 from stock_model.strategy.base import ActionType, BaseStrategy, StrategyResult
 
@@ -77,15 +74,18 @@ class ManualStrategy(BaseStrategy):
         if net_score >= 3:
             action = ActionType.BUY
             confidence = min(0.95, 0.6 + net_score * 0.05)
-            reason = f"技术面偏多 (买入信号={len(buy_signals)}, 卖出信号={len(sell_signals)}, 趋势={trend})"
+            buy_n, sell_n, trend_n = len(buy_signals), len(sell_signals), trend
+            reason = f"技术面偏多 (买入信号={buy_n}, 卖出信号={sell_n}, 趋势={trend_n})"
         elif net_score <= -3:
             action = ActionType.SELL
             confidence = min(0.95, 0.6 + abs(net_score) * 0.05)
-            reason = f"技术面偏空 (买入信号={len(buy_signals)}, 卖出信号={len(sell_signals)}, 趋势={trend})"
+            buy_n, sell_n, trend_n = len(buy_signals), len(sell_signals), trend
+            reason = f"技术面偏空 (买入信号={buy_n}, 卖出信号={sell_n}, 趋势={trend_n})"
         else:
             action = ActionType.HOLD
             confidence = 0.5
-            reason = f"技术面中性 (买入信号={len(buy_signals)}, 卖出信号={len(sell_signals)}, 趋势={trend})"
+            buy_n, sell_n, trend_n = len(buy_signals), len(sell_signals), trend
+            reason = f"技术面中性 (买入信号={buy_n}, 卖出信号={sell_n}, 趋势={trend_n})"
 
         # 6. 计算建议价格
         current_price = df["close"].iloc[-1]

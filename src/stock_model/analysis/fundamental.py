@@ -11,7 +11,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 import pandas as pd
 from loguru import logger
@@ -52,7 +51,7 @@ class FundamentalScore:
 class FundamentalAnalysis:
     """基本面分析器"""
 
-    def __init__(self, fetcher: Optional[StockDataFetcher] = None):
+    def __init__(self, fetcher: StockDataFetcher | None = None):
         self.settings = get_settings().analysis
         self.fetcher = fetcher or StockDataFetcher()
 

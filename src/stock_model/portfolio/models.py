@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 import numpy as np
 
@@ -34,11 +33,11 @@ class Portfolio:
 
     name: str = "default"
     total_value: float = 0.0
-    weights: List[PortfolioWeight] = field(default_factory=list)
-    metrics: Dict[str, float] = field(default_factory=dict)
+    weights: list[PortfolioWeight] = field(default_factory=list)
+    metrics: dict[str, float] = field(default_factory=dict)
 
     @property
-    def symbols(self) -> List[str]:
+    def symbols(self) -> list[str]:
         """组合中的股票代码"""
         return [w.symbol for w in self.weights]
 

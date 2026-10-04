@@ -1,14 +1,13 @@
 """工具函数测试"""
 
-import numpy as np
 import pandas as pd
 import pytest
 
 from stock_model.utils.helpers import (
     calculate_max_drawdown,
+    calculate_profit_factor,
     calculate_sharpe_ratio,
     calculate_win_rate,
-    calculate_profit_factor,
     format_stock_code,
 )
 

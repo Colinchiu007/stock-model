@@ -19,18 +19,16 @@
 from __future__ import annotations
 
 import os
-from typing import Optional
 
 import pandas as pd
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from stock_model.config.settings import get_settings
-from stock_model.data.sources.base import DataSource
 from stock_model.data.sources.akshare_source import AkshareSource
 from stock_model.data.sources.baostock_source import BaostockSource
+from stock_model.data.sources.base import DataSource
 from stock_model.data.storage import DataStorage
-
 
 # akshare/efinance 常见的连接错误模式，触发自动降级
 _CONNECTION_ERROR_PATTERNS = (
@@ -62,12 +60,12 @@ class StockDataFetcher:
     # 可用的数据源名称
     AVAILABLE_SOURCES = ("akshare", "baostock")
 
-    def __init__(self, source: Optional[str] = None):
+    def __init__(self, source: str | None = None):
         self.settings = get_settings()
         self.source = source or self.settings.data.default_source
         self._setup_proxy()
-        self._source_instance: Optional[DataSource] = None
-        self._fallback_instance: Optional[DataSource] = None
+        self._source_instance: DataSource | None = None
+        self._fallback_instance: DataSource | None = None
         self._init_sources()
         # 缓存
         self._storage = DataStorage()
@@ -102,9 +100,7 @@ class StockDataFetcher:
         elif name == "baostock":
             return BaostockSource()
         else:
-            raise ValueError(
-                f"不支持的数据源: {name}, 可选: {StockDataFetcher.AVAILABLE_SOURCES}"
-            )
+            raise ValueError(f"不支持的数据源: {name}, 可选: {StockDataFetcher.AVAILABLE_SOURCES}")
 
     def _is_connection_error(self, error: Exception) -> bool:
         """判断是否为连接类错误（可降级）
@@ -114,8 +110,7 @@ class StockDataFetcher:
         error_str = str(error)
         class_name = error.__class__.__name__
         return any(
-            pattern in error_str or pattern in class_name
-            for pattern in _CONNECTION_ERROR_PATTERNS
+            pattern in error_str or pattern in class_name for pattern in _CONNECTION_ERROR_PATTERNS
         )
 
     def _execute_with_fallback(self, method_name: str, *args, **kwargs) -> pd.DataFrame:
@@ -155,22 +150,16 @@ class StockDataFetcher:
                 method = getattr(self._fallback_instance, method_name)
                 result = method(*args, **kwargs)
                 if result is not None and not result.empty:
-                    logger.info(
-                        f"[{self._fallback_instance.name}] {method_name} 降级获取成功"
-                    )
+                    logger.info(f"[{self._fallback_instance.name}] {method_name} 降级获取成功")
                     return result
-                logger.warning(
-                    f"[{self._fallback_instance.name}] {method_name} 也返回空数据"
-                )
+                logger.warning(f"[{self._fallback_instance.name}] {method_name} 也返回空数据")
             except Exception as fallback_error:
                 logger.error(
                     f"[{self._fallback_instance.name}] {method_name} 也失败: "
                     f"{fallback_error.__class__.__name__}: {fallback_error}"
                 )
 
-        raise RuntimeError(
-            f"数据获取失败: 主数据源[{self.source}]和备选数据源均无法获取数据"
-        )
+        raise RuntimeError(f"数据获取失败: 主数据源[{self.source}]和备选数据源均无法获取数据")
 
     def _setup_proxy(self) -> None:
         """根据配置设置HTTP代理
@@ -270,8 +259,8 @@ class StockDataFetcher:
     def get_daily(
         self,
         symbol: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         """
@@ -297,8 +286,8 @@ class StockDataFetcher:
     def get_weekly(
         self,
         symbol: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         """获取周线行情数据"""
@@ -311,8 +300,8 @@ class StockDataFetcher:
     def get_monthly(
         self,
         symbol: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         """获取月线行情数据"""
@@ -384,8 +373,8 @@ class StockDataFetcher:
     def get_multi_daily(
         self,
         symbols: list[str],
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
     ) -> dict[str, pd.DataFrame]:
         """
         批量获取多只股票日线数据

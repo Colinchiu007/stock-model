@@ -11,7 +11,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
 
 import pandas as pd
 from loguru import logger
@@ -21,6 +20,7 @@ from stock_model.analysis.technical import TechnicalAnalysis
 
 class SignalType(str, Enum):
     """信号类型"""
+
     BUY = "buy"
     SELL = "sell"
     HOLD = "hold"
@@ -28,6 +28,7 @@ class SignalType(str, Enum):
 
 class SignalStrength(str, Enum):
     """信号强度"""
+
     STRONG = "strong"
     MEDIUM = "medium"
     WEAK = "weak"
@@ -36,13 +37,14 @@ class SignalStrength(str, Enum):
 @dataclass
 class Signal:
     """交易信号"""
+
     symbol: str
     signal_type: SignalType
     strength: SignalStrength
     reason: str
     price: float = 0.0
     indicators: dict = field(default_factory=dict)
-    timestamp: Optional[pd.Timestamp] = None
+    timestamp: pd.Timestamp | None = None
 
     def __str__(self) -> str:
         return (
@@ -101,23 +103,27 @@ class SignalGenerator:
             curr_ma5 = self._get_scalar(current, "ma5")
             curr_ma20 = self._get_scalar(current, "ma20")
             if prev_ma5 <= prev_ma20 and curr_ma5 > curr_ma20:
-                signals.append(Signal(
-                    symbol=symbol,
-                    signal_type=SignalType.BUY,
-                    strength=SignalStrength.MEDIUM,
-                    reason="MA5上穿MA20 (金叉)",
-                    price=self._get_scalar(current, "close"),
-                    timestamp=df.index[-1] if isinstance(df.index[-1], pd.Timestamp) else None,
-                ))
+                signals.append(
+                    Signal(
+                        symbol=symbol,
+                        signal_type=SignalType.BUY,
+                        strength=SignalStrength.MEDIUM,
+                        reason="MA5上穿MA20 (金叉)",
+                        price=self._get_scalar(current, "close"),
+                        timestamp=df.index[-1] if isinstance(df.index[-1], pd.Timestamp) else None,
+                    )
+                )
             elif prev_ma5 >= prev_ma20 and curr_ma5 < curr_ma20:
-                signals.append(Signal(
-                    symbol=symbol,
-                    signal_type=SignalType.SELL,
-                    strength=SignalStrength.MEDIUM,
-                    reason="MA5下穿MA20 (死叉)",
-                    price=self._get_scalar(current, "close"),
-                    timestamp=df.index[-1] if isinstance(df.index[-1], pd.Timestamp) else None,
-                ))
+                signals.append(
+                    Signal(
+                        symbol=symbol,
+                        signal_type=SignalType.SELL,
+                        strength=SignalStrength.MEDIUM,
+                        reason="MA5下穿MA20 (死叉)",
+                        price=self._get_scalar(current, "close"),
+                        timestamp=df.index[-1] if isinstance(df.index[-1], pd.Timestamp) else None,
+                    )
+                )
 
         return signals
 
@@ -151,22 +157,26 @@ class SignalGenerator:
 
         # MACD金叉
         if prev_macd <= prev_signal and curr_macd > curr_signal:
-            signals.append(Signal(
-                symbol=symbol,
-                signal_type=SignalType.BUY,
-                strength=SignalStrength.MEDIUM,
-                reason="MACD金叉",
-                price=self._get_scalar(current, "close"),
-            ))
+            signals.append(
+                Signal(
+                    symbol=symbol,
+                    signal_type=SignalType.BUY,
+                    strength=SignalStrength.MEDIUM,
+                    reason="MACD金叉",
+                    price=self._get_scalar(current, "close"),
+                )
+            )
         # MACD死叉
         elif prev_macd >= prev_signal and curr_macd < curr_signal:
-            signals.append(Signal(
-                symbol=symbol,
-                signal_type=SignalType.SELL,
-                strength=SignalStrength.MEDIUM,
-                reason="MACD死叉",
-                price=self._get_scalar(current, "close"),
-            ))
+            signals.append(
+                Signal(
+                    symbol=symbol,
+                    signal_type=SignalType.SELL,
+                    strength=SignalStrength.MEDIUM,
+                    reason="MACD死叉",
+                    price=self._get_scalar(current, "close"),
+                )
+            )
 
         return signals
 
@@ -192,23 +202,27 @@ class SignalGenerator:
         rsi_value = self._get_scalar(current, rsi_col)
 
         if rsi_value < 30:
-            signals.append(Signal(
-                symbol=symbol,
-                signal_type=SignalType.BUY,
-                strength=SignalStrength.STRONG if rsi_value < 20 else SignalStrength.MEDIUM,
-                reason=f"RSI超卖 ({rsi_value:.1f})",
-                price=self._get_scalar(current, "close"),
-                indicators={"rsi": rsi_value},
-            ))
+            signals.append(
+                Signal(
+                    symbol=symbol,
+                    signal_type=SignalType.BUY,
+                    strength=SignalStrength.STRONG if rsi_value < 20 else SignalStrength.MEDIUM,
+                    reason=f"RSI超卖 ({rsi_value:.1f})",
+                    price=self._get_scalar(current, "close"),
+                    indicators={"rsi": rsi_value},
+                )
+            )
         elif rsi_value > 70:
-            signals.append(Signal(
-                symbol=symbol,
-                signal_type=SignalType.SELL,
-                strength=SignalStrength.STRONG if rsi_value > 80 else SignalStrength.MEDIUM,
-                reason=f"RSI超买 ({rsi_value:.1f})",
-                price=self._get_scalar(current, "close"),
-                indicators={"rsi": rsi_value},
-            ))
+            signals.append(
+                Signal(
+                    symbol=symbol,
+                    signal_type=SignalType.SELL,
+                    strength=SignalStrength.STRONG if rsi_value > 80 else SignalStrength.MEDIUM,
+                    reason=f"RSI超买 ({rsi_value:.1f})",
+                    price=self._get_scalar(current, "close"),
+                    indicators={"rsi": rsi_value},
+                )
+            )
 
         return signals
 
@@ -238,21 +252,25 @@ class SignalGenerator:
         upper = self._get_scalar(current, upper_col)
 
         if close <= lower:
-            signals.append(Signal(
-                symbol=symbol,
-                signal_type=SignalType.BUY,
-                strength=SignalStrength.STRONG,
-                reason=f"价格触及布林带下轨 (close={close:.2f}, lower={lower:.2f})",
-                price=close,
-            ))
+            signals.append(
+                Signal(
+                    symbol=symbol,
+                    signal_type=SignalType.BUY,
+                    strength=SignalStrength.STRONG,
+                    reason=f"价格触及布林带下轨 (close={close:.2f}, lower={lower:.2f})",
+                    price=close,
+                )
+            )
         elif close >= upper:
-            signals.append(Signal(
-                symbol=symbol,
-                signal_type=SignalType.SELL,
-                strength=SignalStrength.STRONG,
-                reason=f"价格触及布林带上轨 (close={close:.2f}, upper={upper:.2f})",
-                price=close,
-            ))
+            signals.append(
+                Signal(
+                    symbol=symbol,
+                    signal_type=SignalType.SELL,
+                    strength=SignalStrength.STRONG,
+                    reason=f"价格触及布林带上轨 (close={close:.2f}, upper={upper:.2f})",
+                    price=close,
+                )
+            )
 
         return signals
 

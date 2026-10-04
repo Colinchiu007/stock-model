@@ -7,8 +7,8 @@
 
 from stock_model.data.fetcher import StockDataFetcher
 from stock_model.data.processor import DataProcessor
+from stock_model.data.sources import AkshareSource, BaostockSource, DataSource
 from stock_model.data.storage import DataStorage
-from stock_model.data.sources import DataSource, AkshareSource, BaostockSource
 
 __all__ = [
     "StockDataFetcher",

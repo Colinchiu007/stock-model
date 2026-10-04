@@ -6,9 +6,7 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,7 +29,7 @@ class DataSettings(BaseSettings):
 
     # 数据源配置
     default_source: str = Field(default="akshare", description="默认数据源: akshare/baostock")
-    tushare_token: Optional[str] = Field(default=None, description="Tushare API Token")
+    tushare_token: str | None = Field(default=None, description="Tushare API Token")
 
     # 请求配置
     request_timeout: int = Field(default=30, description="请求超时(秒)")
@@ -43,11 +41,11 @@ class DataSettings(BaseSettings):
     cache_ttl: int = Field(default=3600, description="缓存有效期(秒), 默认1小时")
 
     # 代理配置
-    proxy_url: Optional[str] = Field(
+    proxy_url: str | None = Field(
         default=None,
         description="HTTP代理地址, 如 http://127.0.0.1:7897; 设为 'none' 禁用代理",
     )
-    no_proxy: Optional[str] = Field(
+    no_proxy: str | None = Field(
         default=None,
         description="不走代理的地址, 如 *.eastmoney.com,localhost",
     )
@@ -59,9 +57,7 @@ class AnalysisSettings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="STOCK_ANALYSIS_")
 
     # 技术分析默认参数
-    ma_periods: list[int] = Field(
-        default=[5, 10, 20, 60, 120, 250], description="均线周期"
-    )
+    ma_periods: list[int] = Field(default=[5, 10, 20, 60, 120, 250], description="均线周期")
     macd_fast: int = Field(default=12, description="MACD快线周期")
     macd_slow: int = Field(default=26, description="MACD慢线周期")
     macd_signal: int = Field(default=9, description="MACD信号线周期")
@@ -111,7 +107,7 @@ class Settings(BaseSettings):
 
 
 # 全局单例
-_settings: Optional[Settings] = None
+_settings: Settings | None = None
 
 
 def get_settings() -> Settings:

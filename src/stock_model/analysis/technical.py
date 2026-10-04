@@ -13,14 +13,13 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
 import pandas as pd
 from loguru import logger
 
 try:
     import pandas_ta as ta
+
     HAS_PANDAS_TA = True
 except ImportError:
     ta = None
@@ -42,7 +41,7 @@ class TechnicalAnalysis:
 
     # ==================== 趋势指标 ====================
 
-    def ma(self, df: pd.DataFrame, periods: Optional[list[int]] = None) -> pd.DataFrame:
+    def ma(self, df: pd.DataFrame, periods: list[int] | None = None) -> pd.DataFrame:
         """
         计算简单移动均线
 
@@ -59,7 +58,7 @@ class TechnicalAnalysis:
             df[f"ma{period}"] = df["close"].rolling(window=period).mean()
         return df
 
-    def ema(self, df: pd.DataFrame, periods: Optional[list[int]] = None) -> pd.DataFrame:
+    def ema(self, df: pd.DataFrame, periods: list[int] | None = None) -> pd.DataFrame:
         """计算指数移动均线"""
         df = df.copy()
         periods = periods or self.settings.ma_periods
@@ -70,9 +69,9 @@ class TechnicalAnalysis:
     def macd(
         self,
         df: pd.DataFrame,
-        fast: Optional[int] = None,
-        slow: Optional[int] = None,
-        signal: Optional[int] = None,
+        fast: int | None = None,
+        slow: int | None = None,
+        signal: int | None = None,
     ) -> pd.DataFrame:
         """
         计算MACD指标
@@ -91,7 +90,9 @@ class TechnicalAnalysis:
         slow = slow or self.settings.macd_slow
         signal = signal or self.settings.macd_signal
 
-        macd_result = ta.macd(df["close"], fast=fast, slow=slow, signal=signal) if HAS_PANDAS_TA else None
+        macd_result = (
+            ta.macd(df["close"], fast=fast, slow=slow, signal=signal) if HAS_PANDAS_TA else None
+        )
         if macd_result is not None:
             df = pd.concat([df, macd_result], axis=1)
 
@@ -102,7 +103,7 @@ class TechnicalAnalysis:
     def rsi(
         self,
         df: pd.DataFrame,
-        period: Optional[int] = None,
+        period: int | None = None,
     ) -> pd.DataFrame:
         """
         计算RSI指标
@@ -158,8 +159,8 @@ class TechnicalAnalysis:
     def boll(
         self,
         df: pd.DataFrame,
-        period: Optional[int] = None,
-        std_dev: Optional[float] = None,
+        period: int | None = None,
+        std_dev: float | None = None,
     ) -> pd.DataFrame:
         """
         计算布林带
@@ -185,7 +186,9 @@ class TechnicalAnalysis:
     def atr(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
         """计算ATR (真实波动范围)"""
         df = df.copy()
-        atr_result = ta.atr(df["high"], df["low"], df["close"], length=period) if HAS_PANDAS_TA else None
+        atr_result = (
+            ta.atr(df["high"], df["low"], df["close"], length=period) if HAS_PANDAS_TA else None
+        )
         if atr_result is not None:
             df[f"atr{period}"] = atr_result
         return df

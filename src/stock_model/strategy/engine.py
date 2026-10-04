@@ -8,7 +8,6 @@ BacktestEngine: 历史数据模拟回测、绩效指标计算
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -48,9 +47,9 @@ class BacktestResult:
     symbol: str
     initial_cash: float
     final_cash: float
-    trades: List[Trade] = field(default_factory=list)
+    trades: list[Trade] = field(default_factory=list)
     equity_curve: pd.Series = field(default_factory=pd.Series)
-    metrics: Dict[str, float] = field(default_factory=dict)
+    metrics: dict[str, float] = field(default_factory=dict)
 
     @property
     def total_return(self) -> float:
@@ -107,8 +106,8 @@ class BacktestEngine:
 
         cash = self.initial_cash
         position = 0  # 持仓股数
-        trades: List[Trade] = []
-        equity_history: List[float] = []
+        trades: list[Trade] = []
+        equity_history: list[float] = []
 
         if len(df) < 2:
             return BacktestResult(
@@ -122,7 +121,7 @@ class BacktestEngine:
 
         # 滚动窗口回测
         window = min(60, len(df) - 1)
-        dates = df.index if df.index.name else range(len(df))
+        df.index if df.index.name else range(len(df))
 
         for i in range(window, len(df)):
             # 截止到当前的数据
@@ -202,10 +201,10 @@ class BacktestEngine:
         return result
 
     def _calculate_metrics(
-        self, equity_history: List[float], trades: List[Trade]
-    ) -> Dict[str, float]:
+        self, equity_history: list[float], trades: list[Trade]
+    ) -> dict[str, float]:
         """计算回测绩效指标"""
-        metrics: Dict[str, float] = {}
+        metrics: dict[str, float] = {}
 
         if not equity_history or len(equity_history) < 2:
             metrics["total_return"] = 0.0
@@ -232,17 +231,13 @@ class BacktestEngine:
         if len(daily_returns) > 0:
             # 夏普比率(无风险利率=0)
             std = np.std(daily_returns)
-            metrics["sharpe"] = (
-                np.mean(daily_returns) / std * np.sqrt(250) if std > 0 else 0.0
-            )
+            metrics["sharpe"] = np.mean(daily_returns) / std * np.sqrt(250) if std > 0 else 0.0
 
             # 索提诺比率
             downside = daily_returns[daily_returns < 0]
             downside_std = np.std(downside) if len(downside) > 0 else 0.0
             metrics["sortino"] = (
-                np.mean(daily_returns) / downside_std * np.sqrt(250)
-                if downside_std > 0
-                else 0.0
+                np.mean(daily_returns) / downside_std * np.sqrt(250) if downside_std > 0 else 0.0
             )
 
             # 最大回撤
@@ -274,11 +269,17 @@ class BacktestEngine:
                 paired_returns.append(ret)
 
             if paired_returns:
-                metrics["win_rate"] = sum(1 for r in paired_returns if r > 0) / len(
-                    paired_returns
+                metrics["win_rate"] = sum(1 for r in paired_returns if r > 0) / len(paired_returns)
+                avg_win = (
+                    np.mean([r for r in paired_returns if r > 0])
+                    if any(r > 0 for r in paired_returns)
+                    else 0.0
                 )
-                avg_win = np.mean([r for r in paired_returns if r > 0]) if any(r > 0 for r in paired_returns) else 0.0
-                avg_loss = abs(np.mean([r for r in paired_returns if r <= 0])) if any(r <= 0 for r in paired_returns) else 0.0
+                avg_loss = (
+                    abs(np.mean([r for r in paired_returns if r <= 0]))
+                    if any(r <= 0 for r in paired_returns)
+                    else 0.0
+                )
                 metrics["profit_loss_ratio"] = avg_win / avg_loss if avg_loss > 0 else float("inf")
             else:
                 metrics["win_rate"] = 0.0
@@ -303,7 +304,7 @@ class StrategyPerformance:
     sell_signals: int = 0
     hold_signals: int = 0
     avg_confidence: float = 0.0
-    results: List[StrategyResult] = field(default_factory=list)
+    results: list[StrategyResult] = field(default_factory=list)
 
 
 class StrategyEngine:
@@ -321,13 +322,11 @@ class StrategyEngine:
     """
 
     def __init__(self):
-        self._strategies: Dict[str, BaseStrategy] = {}
-        self._performances: Dict[str, StrategyPerformance] = {}
-        self._weights: Dict[str, float] = {}  # 策略权重
+        self._strategies: dict[str, BaseStrategy] = {}
+        self._performances: dict[str, StrategyPerformance] = {}
+        self._weights: dict[str, float] = {}  # 策略权重
 
-    def register(
-        self, strategy: BaseStrategy, weight: float = 1.0
-    ) -> None:
+    def register(self, strategy: BaseStrategy, weight: float = 1.0) -> None:
         """注册策略
 
         Args:
@@ -336,9 +335,7 @@ class StrategyEngine:
         """
         self._strategies[strategy.name] = strategy
         self._weights[strategy.name] = weight
-        self._performances[strategy.name] = StrategyPerformance(
-            strategy_name=strategy.name
-        )
+        self._performances[strategy.name] = StrategyPerformance(strategy_name=strategy.name)
         logger.info(f"注册策略: {strategy.name} (权重={weight})")
 
     def unregister(self, name: str) -> None:
@@ -349,9 +346,7 @@ class StrategyEngine:
             del self._performances[name]
             logger.info(f"注销策略: {name}")
 
-    def run_all(
-        self, symbol: str, df: pd.DataFrame
-    ) -> Dict[str, StrategyResult]:
+    def run_all(self, symbol: str, df: pd.DataFrame) -> dict[str, StrategyResult]:
         """执行所有策略
 
         Args:
@@ -371,9 +366,7 @@ class StrategyEngine:
                 logger.error(f"策略 {name} 执行失败: {e}")
         return results
 
-    def aggregate_signal(
-        self, results: Dict[str, StrategyResult]
-    ) -> StrategyResult:
+    def aggregate_signal(self, results: dict[str, StrategyResult]) -> StrategyResult:
         """聚合多策略信号(加权投票)
 
         Args:
@@ -431,11 +424,11 @@ class StrategyEngine:
             metadata={"individual_results": {n: str(r) for n, r in results.items()}},
         )
 
-    def get_performance(self) -> Dict[str, StrategyPerformance]:
+    def get_performance(self) -> dict[str, StrategyPerformance]:
         """获取所有策略绩效"""
         return self._performances.copy()
 
-    def list_strategies(self) -> List[str]:
+    def list_strategies(self) -> list[str]:
         """列出已注册策略"""
         return list(self._strategies.keys())
 

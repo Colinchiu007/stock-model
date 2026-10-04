@@ -6,12 +6,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
-import numpy as np
 from loguru import logger
-
-from stock_model.risk.models import Position
 
 
 class PositionSizer:
@@ -22,7 +17,9 @@ class PositionSizer:
     使用示例:
         sizer = PositionSizer()
         shares = sizer.fixed_size(capital=100000, price=10.0)
-        shares = sizer.kelly_size(capital=100000, price=10.0, win_rate=0.6, avg_win=0.05, avg_loss=0.03)
+        shares = sizer.kelly_size(
+            capital=100000, price=10.0, win_rate=0.6, avg_win=0.05, avg_loss=0.03
+        )
     """
 
     def __init__(
@@ -54,7 +51,9 @@ class PositionSizer:
         shares = int(amount / price / self.min_shares) * self.min_shares
         shares = max(0, shares)
 
-        logger.debug(f"固定仓位: 资金={capital}, 价格={price}, 比例={position_pct:.0%}, 股数={shares}")
+        logger.debug(
+            f"固定仓位: 资金={capital}, 价格={price}, 比例={position_pct:.0%}, 股数={shares}"
+        )
         return shares
 
     def kelly_size(
@@ -117,9 +116,9 @@ class PositionSizer:
     def risk_parity(
         self,
         capital: float,
-        prices: Dict[str, float],
-        volatilities: Dict[str, float],
-    ) -> Dict[str, int]:
+        prices: dict[str, float],
+        volatilities: dict[str, float],
+    ) -> dict[str, int]:
         """风险平价仓位
 
         按波动率倒数分配仓位，使每只股票风险贡献相等。

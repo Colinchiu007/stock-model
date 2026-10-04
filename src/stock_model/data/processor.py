@@ -11,8 +11,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -129,7 +127,7 @@ class DataProcessor:
         return result
 
     @staticmethod
-    def normalize(df: pd.DataFrame, columns: Optional[list[str]] = None) -> pd.DataFrame:
+    def normalize(df: pd.DataFrame, columns: list[str] | None = None) -> pd.DataFrame:
         """
         数据标准化 (Z-score)
 

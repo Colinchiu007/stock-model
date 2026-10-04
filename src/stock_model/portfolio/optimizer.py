@@ -7,8 +7,6 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
-
 import numpy as np
 import pandas as pd
 from loguru import logger
@@ -31,8 +29,8 @@ class PortfolioOptimizer:
 
     def equal_weight(
         self,
-        symbols: List[str],
-        prices: Optional[Dict[str, float]] = None,
+        symbols: list[str],
+        prices: dict[str, float] | None = None,
         total_value: float = 100000.0,
     ) -> Portfolio:
         """等权重组合
@@ -78,8 +76,8 @@ class PortfolioOptimizer:
 
     def risk_parity(
         self,
-        returns: Dict[str, pd.Series] | pd.DataFrame,
-        prices: Optional[Dict[str, float]] = None,
+        returns: dict[str, pd.Series] | pd.DataFrame,
+        prices: dict[str, float] | None = None,
         total_value: float = 100000.0,
     ) -> Portfolio:
         """风险平价组合
@@ -146,8 +144,8 @@ class PortfolioOptimizer:
 
     def min_variance(
         self,
-        returns: Dict[str, pd.Series] | pd.DataFrame,
-        prices: Optional[Dict[str, float]] = None,
+        returns: dict[str, pd.Series] | pd.DataFrame,
+        prices: dict[str, float] | None = None,
         total_value: float = 100000.0,
     ) -> Portfolio:
         """最小方差组合
@@ -251,10 +249,10 @@ class PortfolioOptimizer:
 
     def mean_variance(
         self,
-        returns: Dict[str, pd.Series] | pd.DataFrame,
-        prices: Optional[Dict[str, float]] = None,
+        returns: dict[str, pd.Series] | pd.DataFrame,
+        prices: dict[str, float] | None = None,
         total_value: float = 100000.0,
-        target_return: Optional[float] = None,
+        target_return: float | None = None,
     ) -> Portfolio:
         """均值方差优化(Markowitz)
 

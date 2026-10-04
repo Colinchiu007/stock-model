@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 from loguru import logger
@@ -80,7 +79,7 @@ class DataStorage:
         symbol: str,
         data_type: str = "daily",
         format: str = "parquet",
-    ) -> Optional[pd.DataFrame]:
+    ) -> pd.DataFrame | None:
         """加载原始数据"""
         filepath = self.raw_dir / data_type / f"{symbol}.{format}"
         return self._load(filepath, format)
@@ -90,14 +89,14 @@ class DataStorage:
         symbol: str,
         data_type: str = "daily",
         format: str = "parquet",
-    ) -> Optional[pd.DataFrame]:
+    ) -> pd.DataFrame | None:
         """加载处理后数据"""
         filepath = self.processed_dir / data_type / f"{symbol}.{format}"
         return self._load(filepath, format)
 
     # ==================== 缓存 ====================
 
-    def cache_get(self, key: str) -> Optional[pd.DataFrame]:
+    def cache_get(self, key: str) -> pd.DataFrame | None:
         """从缓存获取数据"""
         filepath = self.cache_dir / f"{key}.parquet"
         return self._load(filepath, "parquet")
@@ -114,9 +113,7 @@ class DataStorage:
             f.unlink()
         logger.info("缓存已清除")
 
-    def cache_get_with_ttl(
-        self, key: str, ttl_seconds: int = 3600
-    ) -> Optional[pd.DataFrame]:
+    def cache_get_with_ttl(self, key: str, ttl_seconds: int = 3600) -> pd.DataFrame | None:
         """从缓存获取数据，支持TTL过期检查
 
         Args:
@@ -141,7 +138,7 @@ class DataStorage:
             logger.debug(f"缓存命中: {key} (年龄={file_age:.0f}s)")
         return df
 
-    def cache_info(self, key: str) -> Optional[dict]:
+    def cache_info(self, key: str) -> dict | None:
         """获取缓存信息
 
         Returns:
@@ -170,7 +167,7 @@ class DataStorage:
         else:
             raise ValueError(f"不支持的格式: {format}")
 
-    def _load(self, filepath: Path, format: str) -> Optional[pd.DataFrame]:
+    def _load(self, filepath: Path, format: str) -> pd.DataFrame | None:
         """从文件加载数据"""
         if not filepath.exists():
             return None

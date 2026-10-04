@@ -6,12 +6,9 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
-
 from loguru import logger
 
 from stock_model.risk.models import (
-    PortfolioRisk,
     Position,
     RiskAlert,
     RiskLevel,
@@ -49,10 +46,10 @@ class RiskManager:
 
     def check_portfolio_risk(
         self,
-        positions: List[Position],
+        positions: list[Position],
         total_value: float,
         current_drawdown: float = 0.0,
-    ) -> List[RiskAlert]:
+    ) -> list[RiskAlert]:
         """检查组合风险
 
         Args:
@@ -63,7 +60,7 @@ class RiskManager:
         Returns:
             风险警报列表
         """
-        alerts: List[RiskAlert] = []
+        alerts: list[RiskAlert] = []
 
         # 1. 回撤检查
         if current_drawdown > 0:
@@ -91,13 +88,11 @@ class RiskManager:
             critical = sum(1 for a in alerts if a.level == RiskLevel.CRITICAL)
             danger = sum(1 for a in alerts if a.level == RiskLevel.DANGER)
             warning = sum(1 for a in alerts if a.level == RiskLevel.WARNING)
-            logger.info(
-                f"组合风险检查: 严重={critical}, 危险={danger}, 警告={warning}"
-            )
+            logger.info(f"组合风险检查: 严重={critical}, 危险={danger}, 警告={warning}")
 
         return alerts
 
-    def check_position_risk(self, position: Position) -> List[RiskAlert]:
+    def check_position_risk(self, position: Position) -> list[RiskAlert]:
         """检查单仓风险
 
         Args:
@@ -106,7 +101,7 @@ class RiskManager:
         Returns:
             风险警报列表
         """
-        alerts: List[RiskAlert] = []
+        alerts: list[RiskAlert] = []
 
         if position.shares <= 0:
             return alerts
@@ -123,7 +118,7 @@ class RiskManager:
 
         return alerts
 
-    def check_stop_loss(self, position: Position) -> Optional[RiskAlert]:
+    def check_stop_loss(self, position: Position) -> RiskAlert | None:
         """检查止损
 
         Args:
@@ -144,7 +139,10 @@ class RiskManager:
             return RiskAlert(
                 level=RiskLevel.CRITICAL,
                 type=RiskType.STOP_LOSS,
-                message=f"{position.symbol} 触发止损: 现价={position.current_price:.2f}, 止损价={stop_price:.2f}",
+                message=(
+                    f"{position.symbol} 触发止损: "
+                    f"现价={position.current_price:.2f}, 止损价={stop_price:.2f}"
+                ),
                 action="立即卖出",
                 symbol=position.symbol,
                 value=position.current_price,
@@ -166,7 +164,7 @@ class RiskManager:
 
         return None
 
-    def check_take_profit(self, position: Position) -> Optional[RiskAlert]:
+    def check_take_profit(self, position: Position) -> RiskAlert | None:
         """检查止盈
 
         Args:
@@ -187,7 +185,10 @@ class RiskManager:
             return RiskAlert(
                 level=RiskLevel.WARNING,
                 type=RiskType.TAKE_PROFIT,
-                message=f"{position.symbol} 触发止盈: 现价={position.current_price:.2f}, 止盈价={profit_price:.2f}",
+                message=(
+                    f"{position.symbol} 触发止盈: "
+                    f"现价={position.current_price:.2f}, 止盈价={profit_price:.2f}"
+                ),
                 action="考虑卖出",
                 symbol=position.symbol,
                 value=position.current_price,
@@ -196,7 +197,7 @@ class RiskManager:
 
         return None
 
-    def _check_drawdown(self, current_drawdown: float) -> List[RiskAlert]:
+    def _check_drawdown(self, current_drawdown: float) -> list[RiskAlert]:
         """检查回撤风险"""
         alerts = []
 
@@ -237,8 +238,8 @@ class RiskManager:
         return alerts
 
     def _check_concentration(
-        self, positions: List[Position], total_value: float
-    ) -> List[RiskAlert]:
+        self, positions: list[Position], total_value: float
+    ) -> list[RiskAlert]:
         """检查集中度风险"""
         alerts = []
 
@@ -258,7 +259,10 @@ class RiskManager:
                     RiskAlert(
                         level=level,
                         type=RiskType.CONCENTRATION,
-                        message=f"{pos.symbol} 集中度={concentration:.2%} > 限制{self.position_concentration_limit:.2%}",
+                        message=(
+                            f"{pos.symbol} 集中度={concentration:.2%} "
+                            f"> 限制{self.position_concentration_limit:.2%}"
+                        ),
                         action="减仓",
                         symbol=pos.symbol,
                         value=concentration,

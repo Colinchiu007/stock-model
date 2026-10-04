@@ -6,16 +6,16 @@ import pytest
 
 from stock_model.risk.manager import RiskManager
 from stock_model.risk.models import (
-    Position,
     PortfolioRisk,
+    Position,
     RiskAlert,
     RiskLevel,
     RiskType,
 )
 from stock_model.risk.position_sizer import PositionSizer
 
-
 # --- Position 测试 ---
+
 
 class TestPosition:
     def test_market_value(self):
@@ -27,15 +27,11 @@ class TestPosition:
         assert pos.cost_value == 9000.0
 
     def test_profit_loss(self):
-        pos = Position(
-            symbol="000001", shares=1000, cost_price=9.0, current_price=10.0
-        )
+        pos = Position(symbol="000001", shares=1000, cost_price=9.0, current_price=10.0)
         assert pos.profit_loss == 1000.0
 
     def test_profit_loss_pct(self):
-        pos = Position(
-            symbol="000001", shares=1000, cost_price=9.0, current_price=10.0
-        )
+        pos = Position(symbol="000001", shares=1000, cost_price=9.0, current_price=10.0)
         assert pos.profit_loss_pct == pytest.approx(1.0 / 9.0, abs=0.001)
 
     def test_profit_loss_pct_zero_cost(self):
@@ -43,13 +39,12 @@ class TestPosition:
         assert pos.profit_loss_pct == 0.0
 
     def test_str(self):
-        pos = Position(
-            symbol="000001", shares=1000, cost_price=9.0, current_price=10.0
-        )
+        pos = Position(symbol="000001", shares=1000, cost_price=9.0, current_price=10.0)
         assert "000001" in str(pos)
 
 
 # --- RiskAlert 测试 ---
+
 
 class TestRiskAlert:
     def test_alert_str(self):
@@ -64,6 +59,7 @@ class TestRiskAlert:
 
 
 # --- RiskLevel/RiskType 测试 ---
+
 
 class TestRiskEnums:
     def test_risk_levels(self):
@@ -81,12 +77,11 @@ class TestRiskEnums:
 
 # --- RiskManager 测试 ---
 
+
 class TestRiskManager:
     def test_no_alerts_when_no_risk(self):
         rm = RiskManager()
-        pos = Position(
-            symbol="000001", shares=1000, cost_price=10.0, current_price=12.0
-        )
+        pos = Position(symbol="000001", shares=1000, cost_price=10.0, current_price=12.0)
         alerts = rm.check_portfolio_risk([pos], total_value=100000)
         # 正常持仓不应有警报(未触发止损止盈和集中度)
         critical_alerts = [a for a in alerts if a.level == RiskLevel.CRITICAL]
@@ -189,6 +184,7 @@ class TestRiskManager:
 
 
 # --- PositionSizer 测试 ---
+
 
 class TestPositionSizer:
     def test_fixed_size(self):
@@ -293,6 +289,7 @@ class TestPositionSizer:
 
 # --- PortfolioRisk 测试 ---
 
+
 class TestPortfolioRisk:
     def test_max_concentration(self):
         positions = [
@@ -309,16 +306,12 @@ class TestPortfolioRisk:
 
     def test_has_critical_alerts(self):
         risk = PortfolioRisk(
-            alerts=[
-                RiskAlert(level=RiskLevel.CRITICAL, type=RiskType.DRAWDOWN, message="test")
-            ]
+            alerts=[RiskAlert(level=RiskLevel.CRITICAL, type=RiskType.DRAWDOWN, message="test")]
         )
         assert risk.has_critical_alerts
 
     def test_no_critical_alerts(self):
         risk = PortfolioRisk(
-            alerts=[
-                RiskAlert(level=RiskLevel.WARNING, type=RiskType.DRAWDOWN, message="test")
-            ]
+            alerts=[RiskAlert(level=RiskLevel.WARNING, type=RiskType.DRAWDOWN, message="test")]
         )
         assert not risk.has_critical_alerts

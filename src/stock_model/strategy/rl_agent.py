@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -64,7 +64,7 @@ class RLTradingAgent(BaseStrategy):
             timesteps: 训练步数
         """
         try:
-            from stable_baselines3 import PPO, DQN
+            from stable_baselines3 import DQN, PPO
 
             if self.model_type.lower() == "dqn":
                 self._model = DQN("MlpPolicy", env, verbose=1)

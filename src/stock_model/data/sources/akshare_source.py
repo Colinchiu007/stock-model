@@ -7,8 +7,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import akshare as ak
 import pandas as pd
 from loguru import logger
@@ -27,8 +25,8 @@ class AkshareSource(DataSource):
     def get_daily(
         self,
         symbol: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         logger.debug(f"[akshare] 获取日线: {symbol}")
@@ -44,8 +42,8 @@ class AkshareSource(DataSource):
     def get_weekly(
         self,
         symbol: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         logger.debug(f"[akshare] 获取周线: {symbol}")
@@ -61,8 +59,8 @@ class AkshareSource(DataSource):
     def get_monthly(
         self,
         symbol: str,
-        start_date: Optional[str] = None,
-        end_date: Optional[str] = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         logger.debug(f"[akshare] 获取月线: {symbol}")

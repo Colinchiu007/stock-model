@@ -11,20 +11,20 @@
   - DataSource基类新增抽象方法
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pandas as pd
+import pytest
 
-from stock_model.data.sources.base import DataSource
-from stock_model.data.sources.baostock_source import BaostockSource
+from stock_model.data.fetcher import StockDataFetcher
 from stock_model.data.sources.akshare_source import AkshareSource
-from stock_model.data.fetcher import StockDataFetcher, _CONNECTION_ERROR_PATTERNS
-
+from stock_model.data.sources.baostock_source import BaostockSource
+from stock_model.data.sources.base import DataSource
 
 # ============================================================
 # BaostockSource 静态方法测试
 # ============================================================
+
 
 class TestBaostockConvertSymbol:
     """股票代码转换测试"""
@@ -118,6 +118,7 @@ class TestBaostockConvertAdjust:
 # DataSource 抽象基类测试
 # ============================================================
 
+
 class TestDataSourceBase:
     """数据源抽象基类测试"""
 
@@ -139,6 +140,7 @@ class TestDataSourceBase:
 # StockDataFetcher 测试
 # ============================================================
 
+
 class TestConnectionErrorDetection:
     """连接错误检测测试"""
 
@@ -150,6 +152,7 @@ class TestConnectionErrorDetection:
     def test_remote_disconnected(self):
         """RemoteDisconnected可被检测"""
         from http.client import RemoteDisconnected
+
         err = RemoteDisconnected("Remote end closed connection without response")
         assert StockDataFetcher._is_connection_error(None, err) is True
 
@@ -203,8 +206,9 @@ class TestCreateSource:
 class TestFallbackMechanism:
     """自动降级机制测试 (使用mock)"""
 
-    def _make_fetcher_with_mocks(self, primary_error=None, primary_empty=False,
-                                  fallback_result=None, fallback_error=None):
+    def _make_fetcher_with_mocks(
+        self, primary_error=None, primary_empty=False, fallback_result=None, fallback_error=None
+    ):
         """创建带有mock数据源的fetcher"""
         fetcher = object.__new__(StockDataFetcher)
         fetcher.settings = MagicMock()
@@ -245,9 +249,7 @@ class TestFallbackMechanism:
 
     def test_connection_error_triggers_fallback(self):
         """连接错误触发降级"""
-        fetcher = self._make_fetcher_with_mocks(
-            primary_error=ConnectionError("Connection refused")
-        )
+        fetcher = self._make_fetcher_with_mocks(primary_error=ConnectionError("Connection refused"))
         result = fetcher._execute_with_fallback("get_daily", "000001")
         assert len(result) == 1
         fetcher._fallback_instance.get_daily.assert_called_once()
@@ -261,9 +263,7 @@ class TestFallbackMechanism:
 
     def test_non_connection_error_raises(self):
         """非连接错误直接抛出, 不降级"""
-        fetcher = self._make_fetcher_with_mocks(
-            primary_error=ValueError("Invalid symbol")
-        )
+        fetcher = self._make_fetcher_with_mocks(primary_error=ValueError("Invalid symbol"))
         with pytest.raises(ValueError, match="Invalid symbol"):
             fetcher._execute_with_fallback("get_daily", "000001")
         fetcher._fallback_instance.get_daily.assert_not_called()
@@ -272,16 +272,14 @@ class TestFallbackMechanism:
         """主备都失败抛出RuntimeError"""
         fetcher = self._make_fetcher_with_mocks(
             primary_error=ConnectionError("Connection refused"),
-            fallback_error=RuntimeError("baostock also failed")
+            fallback_error=RuntimeError("baostock also failed"),
         )
         with pytest.raises(RuntimeError, match="数据获取失败"):
             fetcher._execute_with_fallback("get_daily", "000001")
 
     def test_no_fallback_instance_primary_fails(self):
         """无备选数据源时, 连接错误直接抛出"""
-        fetcher = self._make_fetcher_with_mocks(
-            primary_error=ConnectionError("Connection refused")
-        )
+        fetcher = self._make_fetcher_with_mocks(primary_error=ConnectionError("Connection refused"))
         fetcher._fallback_instance = None
         with pytest.raises(ConnectionError):
             fetcher._execute_with_fallback("get_daily", "000001")
@@ -291,22 +289,25 @@ class TestFallbackMechanism:
 # BaostockSource 数据标准化测试
 # ============================================================
 
+
 class TestBaostockNormalize:
     """数据标准化测试"""
 
     def test_column_rename(self):
         """列名映射正确"""
-        df = pd.DataFrame({
-            "date": ["2024-01-01"],
-            "open": ["10.0"],
-            "high": ["11.0"],
-            "low": ["9.0"],
-            "close": ["10.5"],
-            "volume": ["1000000"],
-            "amount": ["10500000"],
-            "turn": ["1.5"],
-            "pctChg": ["5.0"],
-        })
+        df = pd.DataFrame(
+            {
+                "date": ["2024-01-01"],
+                "open": ["10.0"],
+                "high": ["11.0"],
+                "low": ["9.0"],
+                "close": ["10.5"],
+                "volume": ["1000000"],
+                "amount": ["10500000"],
+                "turn": ["1.5"],
+                "pctChg": ["5.0"],
+            }
+        )
         result = BaostockSource._normalize(df, "000001")
         assert "turnover" in result.columns
         assert "pct_change" in result.columns
@@ -315,31 +316,37 @@ class TestBaostockNormalize:
 
     def test_numeric_conversion(self):
         """字符串转数值"""
-        df = pd.DataFrame({
-            "date": ["2024-01-01"],
-            "open": ["10.5"],
-            "close": ["10.8"],
-        })
+        df = pd.DataFrame(
+            {
+                "date": ["2024-01-01"],
+                "open": ["10.5"],
+                "close": ["10.8"],
+            }
+        )
         result = BaostockSource._normalize(df, "000001")
         assert result["open"].dtype in ("float64", "int64")
         assert result["close"].dtype in ("float64", "int64")
 
     def test_date_index(self):
         """日期设置为索引"""
-        df = pd.DataFrame({
-            "date": ["2024-01-01", "2024-01-02"],
-            "close": ["10.0", "11.0"],
-        })
+        df = pd.DataFrame(
+            {
+                "date": ["2024-01-01", "2024-01-02"],
+                "close": ["10.0", "11.0"],
+            }
+        )
         result = BaostockSource._normalize(df, "000001")
         assert result.index.name == "date"
         assert isinstance(result.index, pd.DatetimeIndex)
 
     def test_symbol_added(self):
         """添加symbol列"""
-        df = pd.DataFrame({
-            "date": ["2024-01-01"],
-            "close": ["10.0"],
-        })
+        df = pd.DataFrame(
+            {
+                "date": ["2024-01-01"],
+                "close": ["10.0"],
+            }
+        )
         result = BaostockSource._normalize(df, "600000")
         assert "symbol" in result.columns
         assert result["symbol"].iloc[0] == "600000"
@@ -348,6 +355,7 @@ class TestBaostockNormalize:
 # ============================================================
 # 缓存机制测试
 # ============================================================
+
 
 class TestCacheKey:
     """缓存键生成测试"""
@@ -359,24 +367,19 @@ class TestCacheKey:
 
     def test_key_with_start_date(self):
         """包含开始日期的缓存键"""
-        key = StockDataFetcher._cache_key(
-            "get_daily", "000001", start_date="20240101"
-        )
+        key = StockDataFetcher._cache_key("get_daily", "000001", start_date="20240101")
         assert key == "get_daily_000001_20240101"
 
     def test_key_with_all_params(self):
         """包含所有参数的缓存键"""
         key = StockDataFetcher._cache_key(
-            "get_daily", "600000",
-            start_date="20240101", end_date="20241231", adjust="qfq"
+            "get_daily", "600000", start_date="20240101", end_date="20241231", adjust="qfq"
         )
         assert key == "get_daily_600000_20240101_20241231_qfq"
 
     def test_key_none_params_excluded(self):
         """None参数不参与缓存键"""
-        key1 = StockDataFetcher._cache_key(
-            "get_daily", "000001", start_date=None, end_date=None
-        )
+        key1 = StockDataFetcher._cache_key("get_daily", "000001", start_date=None, end_date=None)
         key2 = StockDataFetcher._cache_key("get_daily", "000001")
         assert key1 == key2
 
@@ -411,9 +414,7 @@ class TestCacheIntegration:
     def test_cache_hit_returns_cached_data(self):
         """缓存命中时直接返回缓存数据"""
         fetcher = self._make_fetcher_with_cache()
-        cached_df = pd.DataFrame(
-            {"close": [10.0]}, index=pd.to_datetime(["2024-01-01"])
-        )
+        cached_df = pd.DataFrame({"close": [10.0]}, index=pd.to_datetime(["2024-01-01"]))
         fetcher._storage.cache_get_with_ttl.return_value = cached_df
 
         result = fetcher._get_with_cache("get_daily", "000001")
@@ -424,9 +425,7 @@ class TestCacheIntegration:
         """缓存未命中时获取数据并写入缓存"""
         fetcher = self._make_fetcher_with_cache()
         fetcher._storage.cache_get_with_ttl.return_value = None
-        fresh_df = pd.DataFrame(
-            {"close": [11.0]}, index=pd.to_datetime(["2024-01-01"])
-        )
+        fresh_df = pd.DataFrame({"close": [11.0]}, index=pd.to_datetime(["2024-01-01"]))
         fetcher._source_instance.get_daily.return_value = fresh_df
 
         result = fetcher._get_with_cache("get_daily", "000001")
@@ -437,9 +436,7 @@ class TestCacheIntegration:
     def test_cache_disabled_skips_cache(self):
         """缓存禁用时不读写缓存"""
         fetcher = self._make_fetcher_with_cache(cache_enabled=False)
-        fresh_df = pd.DataFrame(
-            {"close": [11.0]}, index=pd.to_datetime(["2024-01-01"])
-        )
+        fresh_df = pd.DataFrame({"close": [11.0]}, index=pd.to_datetime(["2024-01-01"]))
         fetcher._source_instance.get_daily.return_value = fresh_df
 
         result = fetcher._get_with_cache("get_daily", "000001")
@@ -452,9 +449,7 @@ class TestCacheIntegration:
         fetcher = self._make_fetcher_with_cache()
         fetcher._storage.cache_get_with_ttl.return_value = None
         fetcher._storage.cache_set.side_effect = OSError("disk full")
-        fresh_df = pd.DataFrame(
-            {"close": [11.0]}, index=pd.to_datetime(["2024-01-01"])
-        )
+        fresh_df = pd.DataFrame({"close": [11.0]}, index=pd.to_datetime(["2024-01-01"]))
         fetcher._source_instance.get_daily.return_value = fresh_df
 
         result = fetcher._get_with_cache("get_daily", "000001")
@@ -474,9 +469,7 @@ class TestCacheIntegration:
         """TTL参数正确传递"""
         fetcher = self._make_fetcher_with_cache(cache_ttl=1800)
         fetcher._storage.cache_get_with_ttl.return_value = None
-        fresh_df = pd.DataFrame(
-            {"close": [11.0]}, index=pd.to_datetime(["2024-01-01"])
-        )
+        fresh_df = pd.DataFrame({"close": [11.0]}, index=pd.to_datetime(["2024-01-01"]))
         fetcher._source_instance.get_daily.return_value = fresh_df
 
         fetcher._get_with_cache("get_daily", "000001")
@@ -488,6 +481,7 @@ class TestCacheIntegration:
 # ============================================================
 # 估值数据获取测试
 # ============================================================
+
 
 class TestValuationFallback:
     """估值数据获取自动降级测试"""
@@ -546,6 +540,7 @@ class TestValuationFallback:
 # 财务摘要获取测试
 # ============================================================
 
+
 class TestFinancialSummaryFallback:
     """财务摘要获取自动降级测试"""
 
@@ -593,6 +588,7 @@ class TestFinancialSummaryFallback:
 # DataSource基类新增抽象方法测试
 # ============================================================
 
+
 class TestDataSourceAbstractMethods:
     """DataSource基类新增抽象方法验证"""
 
@@ -609,22 +605,31 @@ class TestDataSourceAbstractMethods:
 
     def test_incomplete_subclass_raises_type_error(self):
         """不完整的子类无法实例化"""
+
         class IncompleteSource(DataSource):
             name = "incomplete"
+
             def get_daily(self, symbol, start_date=None, end_date=None, adjust="qfq"):
                 pass
+
             def get_weekly(self, symbol, start_date=None, end_date=None, adjust="qfq"):
                 pass
+
             def get_monthly(self, symbol, start_date=None, end_date=None, adjust="qfq"):
                 pass
+
             def get_realtime(self, symbol):
                 pass
+
             def get_stock_info(self, symbol):
                 pass
+
             def get_sector_list(self):
                 pass
+
             def get_sector_stocks(self, sector):
                 pass
+
             # 缺少 get_valuation 和 get_financial_summary
 
         with pytest.raises(TypeError):

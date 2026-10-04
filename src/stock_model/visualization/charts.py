@@ -11,12 +11,11 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from loguru import logger
+from plotly.subplots import make_subplots
 
 from stock_model.config.settings import get_settings
 
@@ -31,7 +30,7 @@ class ChartBuilder:
         self,
         df: pd.DataFrame,
         symbol: str = "",
-        title: Optional[str] = None,
+        title: str | None = None,
         show_volume: bool = True,
         show_ma: bool = True,
         ma_periods: list[int] = [5, 20, 60],
@@ -231,48 +230,58 @@ class ChartBuilder:
 
     def _add_boll_trace(self, fig: go.Figure, df: pd.DataFrame, row: int) -> None:
         """添加布林带"""
-        lower_col = mid_col = upper_col = None
+        lower_col = upper_col = None
         for col in df.columns:
             if "BBL_" in col:
                 lower_col = col
             elif "BBM_" in col:
-                mid_col = col
+                pass
             elif "BBU_" in col:
                 upper_col = col
 
         if upper_col and lower_col:
             fig.add_trace(
                 go.Scatter(x=df.index, y=df[upper_col], name="BOLL Upper", line=dict(width=1)),
-                row=row, col=1,
+                row=row,
+                col=1,
             )
             fig.add_trace(
                 go.Scatter(x=df.index, y=df[lower_col], name="BOLL Lower", line=dict(width=1)),
-                row=row, col=1,
+                row=row,
+                col=1,
             )
             # 填充区域
             fig.add_trace(
                 go.Scatter(
-                    x=df.index, y=df[upper_col],
-                    fill=None, name="BOLL Upper Fill",
-                    showlegend=False, line=dict(width=0),
+                    x=df.index,
+                    y=df[upper_col],
+                    fill=None,
+                    name="BOLL Upper Fill",
+                    showlegend=False,
+                    line=dict(width=0),
                 ),
-                row=row, col=1,
+                row=row,
+                col=1,
             )
             fig.add_trace(
                 go.Scatter(
-                    x=df.index, y=df[lower_col],
-                    fill="tonexty", name="BOLL Band",
-                    showlegend=False, line=dict(width=0),
+                    x=df.index,
+                    y=df[lower_col],
+                    fill="tonexty",
+                    name="BOLL Band",
+                    showlegend=False,
+                    line=dict(width=0),
                     fillcolor="rgba(128,128,128,0.2)",
                 ),
-                row=row, col=1,
+                row=row,
+                col=1,
             )
 
     def export(
         self,
         fig: go.Figure,
         filepath: str | Path,
-        format: Optional[str] = None,
+        format: str | None = None,
     ) -> Path:
         """
         导出图表
