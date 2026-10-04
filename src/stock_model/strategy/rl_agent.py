@@ -357,10 +357,7 @@ class RLTradingAgent(BaseStrategy):
         }
 
         if best_model_type:
-            logger.info(
-                f"最佳模型: {best_model_type.upper()}, "
-                f"mean_reward={best_reward:.4f}"
-            )
+            logger.info(f"最佳模型: {best_model_type.upper()}, mean_reward={best_reward:.4f}")
 
         return result
 

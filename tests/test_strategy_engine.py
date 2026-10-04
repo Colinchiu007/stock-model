@@ -574,7 +574,7 @@ class TestMultiStockTradingEnv:
         """生成多股票测试数据"""
         dfs = {}
         for i in range(n_stocks):
-            dfs[f"00000{i+1}"] = _make_test_df(days=days, trend="up")
+            dfs[f"00000{i + 1}"] = _make_test_df(days=days, trend="up")
         return dfs
 
     def test_init(self):
