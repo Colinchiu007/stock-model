@@ -634,3 +634,193 @@ class TestDataSourceAbstractMethods:
 
         with pytest.raises(TypeError):
             IncompleteSource()
+
+
+# ============================================================
+# P3-4: 缓存增强测试 (CacheStats + 内存缓存层 + 统计)
+# ============================================================
+
+
+class TestCacheStats:
+    """CacheStats数据类测试"""
+
+    def test_creation(self):
+        """应正确创建CacheStats"""
+        from stock_model.data.storage import CacheStats
+
+        stats = CacheStats(hits=10, misses=5, evictions=2, memory_size=3, disk_size=8)
+        assert stats.hits == 10
+        assert stats.misses == 5
+        assert stats.evictions == 2
+        assert stats.memory_size == 3
+        assert stats.disk_size == 8
+
+    def test_hit_rate(self):
+        """命中率应正确计算"""
+        from stock_model.data.storage import CacheStats
+
+        stats = CacheStats(hits=8, misses=2)
+        assert stats.hit_rate == 0.8
+
+    def test_hit_rate_zero_requests(self):
+        """零请求时命中率应为0"""
+        from stock_model.data.storage import CacheStats
+
+        stats = CacheStats()
+        assert stats.hit_rate == 0.0
+
+    def test_total_requests(self):
+        """总请求数应正确"""
+        from stock_model.data.storage import CacheStats
+
+        stats = CacheStats(hits=10, misses=5)
+        assert stats.total_requests == 15
+
+    def test_str_representation(self):
+        """字符串表示应包含关键指标"""
+        from stock_model.data.storage import CacheStats
+
+        stats = CacheStats(hits=10, misses=5)
+        s = str(stats)
+        assert "hits=10" in s
+        assert "misses=5" in s
+
+    def test_summary(self):
+        """summary应返回字典"""
+        from stock_model.data.storage import CacheStats
+
+        stats = CacheStats(hits=10, misses=5, memory_size=3)
+        summary = stats.summary()
+        assert isinstance(summary, dict)
+        assert summary["hits"] == 10
+        assert summary["hit_rate"] == 10 / 15
+
+
+class TestCacheEnhancements:
+    """缓存增强功能测试(内存缓存+统计+驱逐)"""
+
+    def _make_storage(self, memory_cache_size=64):
+        """创建DataStorage实例"""
+        from stock_model.data.storage import DataStorage
+
+        return DataStorage(memory_cache_size=memory_cache_size)
+
+    def _make_test_df(self, rows=10):
+        """创建测试DataFrame"""
+        return pd.DataFrame(
+            {"close": range(rows), "volume": range(rows)},
+            index=pd.date_range("2024-01-01", periods=rows, freq="D"),
+        )
+
+    def test_memory_cache_hit(self):
+        """内存缓存命中应快速返回"""
+        storage = self._make_storage()
+        df = self._make_test_df()
+
+        # 写入缓存
+        storage.cache_set("test_key", df)
+        # 读取(应命中内存缓存)
+        result = storage.cache_get("test_key")
+        assert result is not None
+        assert len(result) == len(df)
+
+    def test_memory_cache_lru_eviction(self):
+        """内存缓存LRU驱逐应正常工作"""
+        storage = self._make_storage(memory_cache_size=3)
+        df = self._make_test_df()
+
+        # 写入4个条目，超过max_size=3
+        for i in range(4):
+            storage.cache_set(f"key_{i}", df)
+
+        stats = storage.cache_stats()
+        assert stats.evictions >= 1  # 至少驱逐1个
+        assert stats.memory_size <= 3
+
+    def test_cache_stats_tracking(self):
+        """缓存统计应正确跟踪命中/未命中"""
+        storage = self._make_storage()
+
+        # 未命中
+        result = storage.cache_get("nonexistent")
+        assert result is None
+
+        # 写入并命中
+        df = self._make_test_df()
+        storage.cache_set("test_key", df)
+        result = storage.cache_get("test_key")
+        assert result is not None
+
+        stats = storage.cache_stats()
+        assert stats.misses >= 1
+        assert stats.hits >= 1
+
+    def test_cache_reset_stats(self):
+        """重置统计应清零"""
+        storage = self._make_storage()
+        df = self._make_test_df()
+
+        storage.cache_set("test_key", df)
+        storage.cache_get("test_key")
+        storage.cache_get("nonexistent")
+
+        storage.cache_reset_stats()
+        stats = storage.cache_stats()
+        assert stats.hits == 0
+        assert stats.misses == 0
+
+    def test_cache_evict_expired(self):
+        """驱逐过期缓存应正常工作"""
+        storage = self._make_storage()
+        df = self._make_test_df()
+
+        # 写入缓存
+        storage.cache_set("test_key", df)
+
+        # 立即驱逐(TTL=0秒应驱逐所有)
+        evicted = storage.cache_evict_expired(ttl_seconds=0)
+        assert evicted >= 1
+
+    def test_cache_info_with_memory(self):
+        """cache_info应包含内存缓存信息"""
+        storage = self._make_storage()
+        df = self._make_test_df()
+
+        storage.cache_set("test_key", df)
+        info = storage.cache_info("test_key")
+        assert info is not None
+        assert info.get("exists") is True
+        assert info.get("in_memory") is True
+
+    def test_cache_clear_both_layers(self):
+        """cache_clear应清除内存和磁盘缓存"""
+        storage = self._make_storage()
+        df = self._make_test_df()
+
+        storage.cache_set("test_key", df)
+        storage.cache_clear()
+
+        result = storage.cache_get("test_key")
+        assert result is None
+
+    def test_cache_stats_disk_info(self):
+        """cache_stats应包含磁盘信息"""
+        storage = self._make_storage()
+        df = self._make_test_df()
+
+        storage.cache_set("test_key", df)
+        stats = storage.cache_stats()
+        assert stats.disk_size >= 1
+        assert stats.disk_bytes > 0
+
+    def test_cache_set_updates_memory(self):
+        """cache_set应同时更新内存缓存"""
+        storage = self._make_storage()
+        df1 = self._make_test_df(rows=5)
+        df2 = self._make_test_df(rows=10)
+
+        storage.cache_set("test_key", df1)
+        storage.cache_set("test_key", df2)
+
+        result = storage.cache_get("test_key")
+        assert len(result) == 10

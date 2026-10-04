@@ -3,6 +3,12 @@
 
 StrategyEngine: 管理多策略执行、信号聚合、绩效追踪
 BacktestEngine: 历史数据模拟回测、绩效指标计算
+
+增强指标 (v0.5.0):
+  - Calmar比率、最大回撤持续期、连续胜负、盈利因子、平均持仓
+  - TradeAnalysis: 交易对分析(收益/持仓天数/最佳/最差)
+  - 基准对比: 买入持有基准、Alpha、Beta、信息比率
+  - 策略比较: compare_strategies 多策略对比报告
 """
 
 from __future__ import annotations
@@ -40,6 +46,99 @@ class Trade:
 
 
 @dataclass
+class TradePair:
+    """配对交易(买入→卖出)"""
+
+    buy_trade: Trade
+    sell_trade: Trade
+
+    @property
+    def return_pct(self) -> float:
+        """收益率"""
+        if self.buy_trade.price == 0:
+            return 0.0
+        return (self.sell_trade.price - self.buy_trade.price) / self.buy_trade.price
+
+    @property
+    def profit(self) -> float:
+        """盈利金额"""
+        buy_cost = self.buy_trade.price * self.buy_trade.shares + self.buy_trade.commission
+        sell_income = self.sell_trade.price * self.sell_trade.shares - self.sell_trade.commission
+        return sell_income - buy_cost
+
+    @property
+    def is_win(self) -> bool:
+        """是否盈利"""
+        return self.return_pct > 0
+
+    @property
+    def holding_days(self) -> int:
+        """持仓天数"""
+        if isinstance(self.buy_trade.timestamp, pd.Timestamp) and isinstance(
+            self.sell_trade.timestamp, pd.Timestamp
+        ):
+            delta = self.sell_trade.timestamp - self.buy_trade.timestamp
+            return max(1, delta.days)
+        return 1
+
+    def __str__(self) -> str:
+        return (
+            f"TradePair(收益={self.return_pct:.2%}, "
+            f"持仓={self.holding_days}天, "
+            f"盈利={self.profit:.2f})"
+        )
+
+
+@dataclass
+class TradeAnalysis:
+    """交易分析报告"""
+
+    total_pairs: int = 0
+    win_count: int = 0
+    loss_count: int = 0
+    win_rate: float = 0.0
+    avg_return: float = 0.0
+    avg_win_return: float = 0.0
+    avg_loss_return: float = 0.0
+    best_trade_return: float = 0.0
+    worst_trade_return: float = 0.0
+    avg_holding_days: float = 0.0
+    max_consecutive_wins: int = 0
+    max_consecutive_losses: int = 0
+    profit_factor: float = 0.0
+    total_profit: float = 0.0
+    total_loss: float = 0.0
+
+    def __str__(self) -> str:
+        return (
+            f"TradeAnalysis(交易对={self.total_pairs}, "
+            f"胜率={self.win_rate:.2%}, "
+            f"盈利因子={self.profit_factor:.2f}, "
+            f"平均持仓={self.avg_holding_days:.1f}天)"
+        )
+
+
+@dataclass
+class BenchmarkResult:
+    """基准对比结果"""
+
+    strategy_return: float = 0.0
+    benchmark_return: float = 0.0
+    alpha: float = 0.0
+    beta: float = 0.0
+    information_ratio: float = 0.0
+    tracking_error: float = 0.0
+
+    def __str__(self) -> str:
+        return (
+            f"Benchmark(策略={self.strategy_return:.2%}, "
+            f"基准={self.benchmark_return:.2%}, "
+            f"Alpha={self.alpha:.2%}, "
+            f"Beta={self.beta:.2f})"
+        )
+
+
+@dataclass
 class BacktestResult:
     """回测结果"""
 
@@ -50,6 +149,8 @@ class BacktestResult:
     trades: list[Trade] = field(default_factory=list)
     equity_curve: pd.Series = field(default_factory=pd.Series)
     metrics: dict[str, float] = field(default_factory=dict)
+    trade_analysis: TradeAnalysis = field(default_factory=TradeAnalysis)
+    benchmark: BenchmarkResult = field(default_factory=BenchmarkResult)
 
     @property
     def total_return(self) -> float:
@@ -184,6 +285,12 @@ class BacktestEngine:
         # 计算指标
         metrics = self._calculate_metrics(equity_history, trades)
 
+        # 交易分析
+        trade_analysis = self._analyze_trades(trades)
+
+        # 基准对比
+        benchmark = self._calc_benchmark(equity_history, df)
+
         result = BacktestResult(
             strategy_name=strategy.name,
             symbol=symbol,
@@ -192,11 +299,14 @@ class BacktestEngine:
             trades=trades,
             equity_curve=pd.Series(equity_history),
             metrics=metrics,
+            trade_analysis=trade_analysis,
+            benchmark=benchmark,
         )
 
         logger.info(
             f"回测完成: {strategy.name} / {symbol}, "
-            f"收益率={result.total_return:.2%}, 交易={len(trades)}笔"
+            f"收益率={result.total_return:.2%}, 交易={len(trades)}笔, "
+            f"胜率={trade_analysis.win_rate:.2%}, Alpha={benchmark.alpha:.2%}"
         )
         return result
 
@@ -247,11 +357,23 @@ class BacktestEngine:
 
             # 波动率
             metrics["volatility"] = float(std * np.sqrt(250))
+
+            # Calmar比率(年化收益/最大回撤绝对值)
+            max_dd_abs = abs(metrics["max_drawdown"])
+            if max_dd_abs > 0:
+                metrics["calmar"] = metrics.get("annual_return", 0.0) / max_dd_abs
+            else:
+                metrics["calmar"] = 0.0
+
+            # 最大回撤持续期(天数)
+            metrics["max_drawdown_duration"] = self._calc_max_drawdown_duration(equity)
         else:
             metrics["sharpe"] = 0.0
             metrics["sortino"] = 0.0
             metrics["max_drawdown"] = 0.0
             metrics["volatility"] = 0.0
+            metrics["calmar"] = 0.0
+            metrics["max_drawdown_duration"] = 0.0
 
         # 交易统计
         if trades:
@@ -292,6 +414,153 @@ class BacktestEngine:
             metrics["win_rate"] = 0.0
 
         return metrics
+
+    @staticmethod
+    def _calc_max_drawdown_duration(equity: np.ndarray) -> float:
+        """计算最大回撤持续期(天数)"""
+        peak = np.maximum.accumulate(equity)
+        in_drawdown = equity < peak
+        if not np.any(in_drawdown):
+            return 0.0
+
+        max_duration = 0
+        current_duration = 0
+        for is_dd in in_drawdown:
+            if is_dd:
+                current_duration += 1
+                max_duration = max(max_duration, current_duration)
+            else:
+                current_duration = 0
+        return float(max_duration)
+
+    def _analyze_trades(self, trades: list[Trade]) -> TradeAnalysis:
+        """分析配对交易，生成交易分析报告"""
+        analysis = TradeAnalysis()
+
+        buy_trades = [t for t in trades if t.action == ActionType.BUY]
+        sell_trades = [t for t in trades if t.action == ActionType.SELL]
+
+        n_pairs = min(len(buy_trades), len(sell_trades))
+        if n_pairs == 0:
+            return analysis
+
+        pairs = []
+        for i in range(n_pairs):
+            pair = TradePair(buy_trade=buy_trades[i], sell_trade=sell_trades[i])
+            pairs.append(pair)
+
+        returns = [p.return_pct for p in pairs]
+        wins = [p for p in pairs if p.is_win]
+        losses = [p for p in pairs if not p.is_win]
+
+        analysis.total_pairs = n_pairs
+        analysis.win_count = len(wins)
+        analysis.loss_count = len(losses)
+        analysis.win_rate = len(wins) / n_pairs if n_pairs > 0 else 0.0
+        analysis.avg_return = float(np.mean(returns))
+        analysis.avg_win_return = float(np.mean([p.return_pct for p in wins])) if wins else 0.0
+        analysis.avg_loss_return = float(np.mean([p.return_pct for p in losses])) if losses else 0.0
+        analysis.best_trade_return = max(returns) if returns else 0.0
+        analysis.worst_trade_return = min(returns) if returns else 0.0
+        analysis.avg_holding_days = float(np.mean([p.holding_days for p in pairs]))
+
+        # 连续胜负
+        max_wins = 0
+        max_losses = 0
+        current_wins = 0
+        current_losses = 0
+        for p in pairs:
+            if p.is_win:
+                current_wins += 1
+                current_losses = 0
+                max_wins = max(max_wins, current_wins)
+            else:
+                current_losses += 1
+                current_wins = 0
+                max_losses = max(max_losses, current_losses)
+
+        analysis.max_consecutive_wins = max_wins
+        analysis.max_consecutive_losses = max_losses
+
+        # 盈利因子(总盈利/总亏损绝对值)
+        total_profit = sum(p.profit for p in wins)
+        total_loss = abs(sum(p.profit for p in losses))
+        analysis.total_profit = total_profit
+        analysis.total_loss = total_loss
+        analysis.profit_factor = total_profit / total_loss if total_loss > 0 else float("inf")
+
+        return analysis
+
+    def _calc_benchmark(self, equity_history: list[float], df: pd.DataFrame) -> BenchmarkResult:
+        """计算买入持有基准对比"""
+        result = BenchmarkResult()
+
+        if len(equity_history) < 2 or len(df) < 2:
+            return result
+
+        equity = np.array(equity_history)
+        strategy_return = (equity[-1] - equity[0]) / equity[0] if equity[0] != 0 else 0.0
+
+        # 买入持有基准收益
+        prices = df["close"].values
+        window = min(60, len(df) - 1)
+        benchmark_start = float(prices[window])
+        benchmark_end = float(prices[-1])
+        benchmark_return = (
+            (benchmark_end - benchmark_start) / benchmark_start if benchmark_start != 0 else 0.0
+        )
+
+        result.strategy_return = strategy_return
+        result.benchmark_return = benchmark_return
+        result.alpha = strategy_return - benchmark_return
+
+        # Beta: 策略日收益与基准日收益的协方差/基准方差
+        if len(equity) > 2 and len(prices) > window + 2:
+            strat_returns = np.diff(equity) / equity[:-1]
+            bench_prices = prices[window:]
+            bench_returns = np.diff(bench_prices.astype(float)) / bench_prices[:-1].astype(float)
+            min_len = min(len(strat_returns), len(bench_returns))
+            if min_len > 1:
+                strat_returns = strat_returns[:min_len]
+                bench_returns = bench_returns[:min_len]
+                bench_var = np.var(bench_returns)
+                if bench_var > 0:
+                    result.beta = float(np.cov(strat_returns, bench_returns)[0, 1] / bench_var)
+
+                # 信息比率
+                excess_returns = strat_returns - bench_returns
+                tracking_error = float(np.std(excess_returns)) * np.sqrt(252)
+                result.tracking_error = tracking_error
+                if tracking_error > 0:
+                    result.information_ratio = float(np.mean(excess_returns)) * 252 / tracking_error
+
+        return result
+
+    def compare_strategies(
+        self,
+        strategies: list[BaseStrategy],
+        df: pd.DataFrame,
+        symbol: str = "test",
+    ) -> dict[str, BacktestResult]:
+        """比较多个策略的回测结果
+
+        Args:
+            strategies: 策略实例列表
+            df: 历史行情数据
+            symbol: 股票代码
+
+        Returns:
+            策略名→回测结果的映射
+        """
+        results: dict[str, BacktestResult] = {}
+        for strategy in strategies:
+            try:
+                result = self.run(strategy, df, symbol)
+                results[strategy.name] = result
+                logger.debug(f"策略比较: {strategy.name} 完成")
+            except Exception as e:
+                logger.warning(f"策略比较: {strategy.name} 失败: {e}")
+        return results
 
 
 @dataclass
