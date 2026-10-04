@@ -41,7 +41,7 @@ class DataProcessor:
         if remove_nan:
             before = len(df)
             df = df.dropna()
-            logger.info(f"数据清洗: {before} -> {len(df)} 条记录")
+            logger.debug(f"数据清洗: {before} -> {len(df)} 条记录")
 
         return df
 
@@ -96,7 +96,7 @@ class DataProcessor:
         for symbol, df in data_dict.items():
             result[symbol] = df.loc[df.index.isin(common_idx)]
 
-        logger.info(f"数据对齐: {method}, 共 {len(common_idx)} 个交易日")
+        logger.debug(f"数据对齐: {method}, 共 {len(common_idx)} 个交易日")
         return result
 
     @staticmethod

@@ -285,7 +285,7 @@ class SignalGenerator:
         Returns:
             综合信号列表
         """
-        logger.info(f"生成交易信号: {symbol}")
+        logger.debug(f"生成交易信号: {symbol}")
         all_signals = []
 
         all_signals.extend(self.ma_cross_signal(df, symbol))
@@ -296,7 +296,7 @@ class SignalGenerator:
         # 统计信号
         buy_count = sum(1 for s in all_signals if s.signal_type == SignalType.BUY)
         sell_count = sum(1 for s in all_signals if s.signal_type == SignalType.SELL)
-        logger.info(f"信号统计: 买入={buy_count}, 卖出={sell_count}")
+        logger.debug(f"信号统计: 买入={buy_count}, 卖出={sell_count}")
 
         return all_signals
 

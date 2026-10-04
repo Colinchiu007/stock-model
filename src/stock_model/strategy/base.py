@@ -88,7 +88,7 @@ class BaseStrategy(ABC):
         Returns:
             策略执行结果
         """
-        logger.info(f"执行策略 [{self.name}]: {symbol}")
+        logger.debug(f"执行策略 [{self.name}]: {symbol}")
         result = self.analyze(symbol, df)
-        logger.info(f"策略结果: {result}")
+        logger.debug(f"策略结果: {result}")
         return result

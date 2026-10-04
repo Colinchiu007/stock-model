@@ -116,7 +116,7 @@ class DataQualityMonitor:
         report.score = self._calculate_score(report)
 
         if report.issues:
-            logger.info(f"数据质量检查 {symbol}: {report}")
+            logger.debug(f"数据质量检查 {symbol}: {report}")
 
         return report
 
