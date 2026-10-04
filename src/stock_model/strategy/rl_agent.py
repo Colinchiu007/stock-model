@@ -8,12 +8,15 @@
   - 训练监控回调
   - 规则策略降级 (无依赖时)
   - TradingEnv集成
+  - Episode级评估 (多轮评估+统计指标)
+  - 训练-评估-选择闭环 (train_evaluate_select)
 
 依赖 stable-baselines3 和 gymnasium (可选，未安装时降级)。
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +25,63 @@ import pandas as pd
 from loguru import logger
 
 from stock_model.strategy.base import ActionType, BaseStrategy, StrategyResult
+
+
+@dataclass
+class EvaluationResult:
+    """RL Agent评估结果
+
+    Attributes:
+        model_type: 模型类型 (ppo/dqn/rule_based)
+        n_episodes: 评估轮数
+        total_rewards: 每轮总奖励列表
+        episode_lengths: 每轮步数列表
+        final_values: 每轮最终组合价值列表
+        mean_reward: 平均奖励
+        std_reward: 奖励标准差
+        mean_value: 平均最终价值
+        win_rate: 盈利轮比例(最终价值>初始资金)
+        sharpe_ratio: 平均奖励的年化夏普比率
+        max_drawdown: 最大回撤
+        backtest_metrics: 回测指标(如果有)
+    """
+
+    model_type: str
+    n_episodes: int = 0
+    total_rewards: list[float] = field(default_factory=list)
+    episode_lengths: list[int] = field(default_factory=list)
+    final_values: list[float] = field(default_factory=list)
+    mean_reward: float = 0.0
+    std_reward: float = 0.0
+    mean_value: float = 0.0
+    win_rate: float = 0.0
+    sharpe_ratio: float = 0.0
+    max_drawdown: float = 0.0
+    backtest_metrics: dict[str, Any] = field(default_factory=dict)
+
+    def __str__(self) -> str:
+        return (
+            f"EvaluationResult({self.model_type}, "
+            f"episodes={self.n_episodes}, "
+            f"mean_reward={self.mean_reward:.4f}, "
+            f"mean_value={self.mean_value:.0f}, "
+            f"win_rate={self.win_rate:.1%}, "
+            f"sharpe={self.sharpe_ratio:.2f}, "
+            f"max_dd={self.max_drawdown:.2%})"
+        )
+
+    def summary(self) -> dict[str, Any]:
+        """返回评估摘要字典"""
+        return {
+            "model_type": self.model_type,
+            "n_episodes": self.n_episodes,
+            "mean_reward": self.mean_reward,
+            "std_reward": self.std_reward,
+            "mean_value": self.mean_value,
+            "win_rate": self.win_rate,
+            "sharpe_ratio": self.sharpe_ratio,
+            "max_drawdown": self.max_drawdown,
+        }
 
 
 class RLTradingAgent(BaseStrategy):
@@ -73,12 +133,233 @@ class RLTradingAgent(BaseStrategy):
             return self._rule_based(symbol, df)
 
     def evaluate(self, symbol: str, df: pd.DataFrame) -> dict:
-        """评估策略表现"""
+        """评估策略表现(回测模式)"""
         from stock_model.strategy.engine import BacktestEngine
 
         engine = BacktestEngine(initial_cash=100000)
         result = engine.run(self, df, symbol)
         return result.metrics
+
+    def evaluate_episodes(
+        self,
+        env: Any,
+        n_episodes: int = 10,
+        deterministic: bool = True,
+    ) -> EvaluationResult:
+        """Episode级评估: 运行多轮评估并收集统计指标
+
+        Args:
+            env: gymnasium环境(TradingEnv/MultiStockTradingEnv实例)
+            n_episodes: 评估轮数
+            deterministic: 是否使用确定性策略
+
+        Returns:
+            EvaluationResult评估结果
+        """
+        total_rewards: list[float] = []
+        episode_lengths: list[int] = []
+        final_values: list[float] = []
+
+        for ep in range(n_episodes):
+            obs, info = env.reset()
+            episode_reward = 0.0
+            step_count = 0
+            done = False
+
+            while not done:
+                if self._trained and self._model is not None:
+                    try:
+                        action, _ = self._model.predict(obs, deterministic=deterministic)
+                        if isinstance(action, np.ndarray):
+                            action = int(action.flat[0])
+                        else:
+                            action = int(action)
+                    except Exception:
+                        action = 0  # HOLD as fallback
+                else:
+                    action = 0  # 未训练时HOLD
+
+                obs, reward, terminated, truncated, info = env.step(action)
+                episode_reward += reward
+                step_count += 1
+                done = terminated or truncated
+
+            total_rewards.append(episode_reward)
+            episode_lengths.append(step_count)
+            final_value = getattr(env, "total_value", 0.0)
+            if final_value == 0.0 and hasattr(env, "_total_value"):
+                final_value = env._total_value
+            final_values.append(final_value)
+
+        # 计算统计指标
+        rewards_arr = np.array(total_rewards)
+        values_arr = np.array(final_values)
+        initial_balance = getattr(env, "initial_balance", 100000.0)
+
+        mean_reward = float(np.mean(rewards_arr))
+        std_reward = float(np.std(rewards_arr))
+        mean_value = float(np.mean(values_arr))
+        win_rate = float(np.mean(values_arr > initial_balance))
+
+        # 夏普比率(年化)
+        if std_reward > 0:
+            sharpe_ratio = float(mean_reward / std_reward * np.sqrt(252))
+        else:
+            sharpe_ratio = 0.0
+
+        # 最大回撤(基于最终价值序列)
+        if len(values_arr) > 1:
+            peak = values_arr[0]
+            max_dd = 0.0
+            for v in values_arr:
+                if v > peak:
+                    peak = v
+                dd = (peak - v) / peak if peak > 0 else 0.0
+                if dd > max_dd:
+                    max_dd = dd
+            max_drawdown = float(max_dd)
+        else:
+            max_drawdown = 0.0
+
+        result = EvaluationResult(
+            model_type=self.model_type if self._trained else "rule_based",
+            n_episodes=n_episodes,
+            total_rewards=total_rewards,
+            episode_lengths=episode_lengths,
+            final_values=final_values,
+            mean_reward=mean_reward,
+            std_reward=std_reward,
+            mean_value=mean_value,
+            win_rate=win_rate,
+            sharpe_ratio=sharpe_ratio,
+            max_drawdown=max_drawdown,
+        )
+
+        logger.info(f"评估完成: {result}")
+        return result
+
+    def compare_with_baseline(
+        self,
+        env: Any,
+        df: pd.DataFrame,
+        symbol: str,
+        n_episodes: int = 10,
+    ) -> dict[str, EvaluationResult]:
+        """对比RL模型与规则基线策略
+
+        Args:
+            env: 评估环境
+            df: 回测数据
+            symbol: 股票代码
+            n_episodes: 评估轮数
+
+        Returns:
+            {"rl": EvaluationResult, "baseline": EvaluationResult}
+        """
+        results: dict[str, EvaluationResult] = {}
+
+        # RL模型评估
+        if self._trained and self._model is not None:
+            results["rl"] = self.evaluate_episodes(env, n_episodes=n_episodes)
+        else:
+            results["rl"] = EvaluationResult(model_type="untrained", n_episodes=0)
+
+        # 前测基线
+        from stock_model.strategy.engine import BacktestEngine
+
+        engine = BacktestEngine(initial_cash=100000)
+        bt_result = engine.run(self, df, symbol)
+
+        baseline = EvaluationResult(
+            model_type="rule_based",
+            n_episodes=1,
+            mean_value=bt_result.metrics.get("total_return", 0.0) * 100000 + 100000,
+            backtest_metrics=bt_result.metrics,
+        )
+        results["baseline"] = baseline
+
+        logger.info(
+            f"对比完成: RL mean_reward={results['rl'].mean_reward:.4f}, "
+            f"Baseline return={bt_result.metrics.get('total_return', 0.0):.2%}"
+        )
+        return results
+
+    def train_evaluate_select(
+        self,
+        train_env: Any,
+        eval_env: Any,
+        df: pd.DataFrame,
+        symbol: str,
+        model_types: list[str] | None = None,
+        timesteps: int = 10000,
+        n_eval_episodes: int = 10,
+    ) -> dict[str, Any]:
+        """训练-评估-选择闭环
+
+        对多个模型类型进行训练和评估，选择最佳模型。
+
+        Args:
+            train_env: 讛练环境
+            eval_env: 评估环境
+            df: 回测数据
+            symbol: 股票代码
+            model_types: 模型类型列表 (默认["ppo", "dqn"])
+            timesteps: 训练步数
+            n_eval_episodes: 评估轮数
+
+        Returns:
+            包含所有评估结果和最佳模型的字典
+        """
+        if model_types is None:
+            model_types = ["ppo", "dqn"]
+
+        eval_results: dict[str, EvaluationResult] = {}
+        train_results: dict[str, dict] = {}
+        best_model_type: str | None = None
+        best_reward = float("-inf")
+
+        for mt in model_types:
+            logger.info(f"训练 {mt.upper()} 挆型...")
+            self.model_type = mt.lower()
+            self._model = None
+            self._trained = False
+
+            # 训练
+            train_result = self.train(train_env, timesteps=timesteps)
+            train_results[mt] = train_result
+
+            if not train_result.get("trained", False):
+                logger.warning(f"{mt.upper()} 训练失败，跳过评估")
+                continue
+
+            # 评估
+            eval_result = self.evaluate_episodes(eval_env, n_episodes=n_eval_episodes)
+            eval_results[mt] = eval_result
+
+            # 选择最佳
+            if eval_result.mean_reward > best_reward:
+                best_reward = eval_result.mean_reward
+                best_model_type = mt
+
+        # 前测基线对比
+        baseline_results = self.compare_with_baseline(
+            eval_env, df, symbol, n_episodes=n_eval_episodes
+        )
+
+        result = {
+            "train_results": train_results,
+            "eval_results": {k: v.summary() for k, v in eval_results.items()},
+            "baseline": baseline_results.get(
+                "baseline", EvaluationResult(model_type="rule_based")
+            ).summary(),
+            "best_model_type": best_model_type,
+            "best_reward": best_reward if best_model_type else None,
+        }
+
+        if best_model_type:
+            logger.info(f"最佳模型: {best_model_type.upper()}, mean_reward={best_reward:.4f}")
+
+        return result
 
     def train(
         self,
