@@ -701,6 +701,7 @@ class TestCacheEnhancements:
 
     def _make_storage(self, memory_cache_size=64):
         """创建DataStorage实例"""
+        pytest.importorskip("pyarrow")
         from stock_model.data.storage import DataStorage
 
         return DataStorage(memory_cache_size=memory_cache_size)
