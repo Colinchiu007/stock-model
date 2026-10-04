@@ -220,7 +220,7 @@ class TechnicalAnalysis:
         Returns:
             添加了所有技术指标列的DataFrame
         """
-        logger.info(f"执行综合技术分析, 数据量: {len(df)} 条")
+        logger.debug(f"执行综合技术分析, 数据量: {len(df)} 条")
         df = df.copy()
 
         # 趋势指标
@@ -240,5 +240,5 @@ class TechnicalAnalysis:
         df = self.obv(df)
         df = self.volume_ma(df)
 
-        logger.info(f"技术分析完成, 指标列数: {len(df.columns)}")
+        logger.debug(f"技术分析完成, 指标列数: {len(df.columns)}")
         return df

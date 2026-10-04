@@ -275,11 +275,11 @@ class StockDataFetcher:
         Returns:
             DataFrame with columns: date, open, high, low, close, volume, amount
         """
-        logger.info(f"获取日线数据: {symbol}, {start_date} ~ {end_date}")
+        logger.debug(f"获取日线数据: {symbol}, {start_date} ~ {end_date}")
         df = self._get_with_cache(
             "get_daily", symbol, start_date=start_date, end_date=end_date, adjust=adjust
         )
-        logger.info(f"获取到 {len(df)} 条日线数据")
+        logger.debug(f"获取到 {len(df)} 条日线数据")
         return df
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
@@ -291,7 +291,7 @@ class StockDataFetcher:
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         """获取周线行情数据"""
-        logger.info(f"获取周线数据: {symbol}")
+        logger.debug(f"获取周线数据: {symbol}")
         return self._get_with_cache(
             "get_weekly", symbol, start_date=start_date, end_date=end_date, adjust=adjust
         )
@@ -305,7 +305,7 @@ class StockDataFetcher:
         adjust: str = "qfq",
     ) -> pd.DataFrame:
         """获取月线行情数据"""
-        logger.info(f"获取月线数据: {symbol}")
+        logger.debug(f"获取月线数据: {symbol}")
         return self._get_with_cache(
             "get_monthly", symbol, start_date=start_date, end_date=end_date, adjust=adjust
         )
@@ -321,7 +321,7 @@ class StockDataFetcher:
         Returns:
             实时行情数据
         """
-        logger.info(f"获取实时行情: {symbol}")
+        logger.debug(f"获取实时行情: {symbol}")
         return self._execute_with_fallback("get_realtime", symbol)
 
     # ==================== 基本面数据 ====================
@@ -329,7 +329,7 @@ class StockDataFetcher:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def get_stock_info(self, symbol: str) -> pd.DataFrame:
         """获取股票基本信息"""
-        logger.info(f"获取股票信息: {symbol}")
+        logger.debug(f"获取股票信息: {symbol}")
         return self._execute_with_fallback("get_stock_info", symbol)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
@@ -340,7 +340,7 @@ class StockDataFetcher:
           - akshare: 同花顺财务摘要 / 财务分析指标
           - baostock: 盈利数据(roeAvg, npMargin等)
         """
-        logger.info(f"获取财务摘要: {symbol}")
+        logger.debug(f"获取财务摘要: {symbol}")
         return self._execute_with_fallback("get_financial_summary", symbol)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
@@ -351,7 +351,7 @@ class StockDataFetcher:
           - akshare: stock_a_indicator_lg (PE/PB/PS/股息率/总市值)
           - baostock: history_k_data_plus (peTTM/pbMRQ/psTTM)
         """
-        logger.info(f"获取估值数据: {symbol}")
+        logger.debug(f"获取估值数据: {symbol}")
         return self._execute_with_fallback("get_valuation", symbol)
 
     # ==================== 板块数据 ====================
@@ -359,13 +359,13 @@ class StockDataFetcher:
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def get_sector_list(self) -> pd.DataFrame:
         """获取行业板块列表"""
-        logger.info("获取行业板块列表")
+        logger.debug("获取行业板块列表")
         return self._execute_with_fallback("get_sector_list")
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
     def get_sector_stocks(self, sector: str) -> pd.DataFrame:
         """获取板块成分股"""
-        logger.info(f"获取板块成分股: {sector}")
+        logger.debug(f"获取板块成分股: {sector}")
         return self._execute_with_fallback("get_sector_stocks", sector)
 
     # ==================== 批量获取 ====================

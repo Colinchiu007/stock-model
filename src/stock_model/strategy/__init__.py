@@ -11,6 +11,7 @@ from stock_model.strategy.engine import (
 from stock_model.strategy.manual import ManualStrategy
 from stock_model.strategy.quant_strategy import QuantStrategy, StrategyParams
 from stock_model.strategy.rl_agent import RLTradingAgent
+from stock_model.strategy.trading_env import TradingEnv
 
 __all__ = [
     "ActionType",
@@ -25,4 +26,5 @@ __all__ = [
     "StrategyPerformance",
     "Trade",
     "RLTradingAgent",
+    "TradingEnv",
 ]
