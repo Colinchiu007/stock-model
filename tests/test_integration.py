@@ -326,8 +326,12 @@ class TestTradingPipeline:
         pipeline = TradingPipeline(config=pipeline_config)
         pipeline.add_strategy(ManualStrategy())
 
-        callback_results = []
-        pipeline.on_result(lambda r: callback_results.append(r))
+        callback_results: list[PipelineResult] = []
+
+        def on_result(r: PipelineResult) -> None:
+            callback_results.append(r)
+
+        pipeline.on_result(on_result)
 
         pipeline.run_once("000001")
 

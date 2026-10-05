@@ -3,8 +3,9 @@
 覆盖 GET/POST 端点、Pipeline控制、信号管理、回测、组合优化、数据质量检查。
 """
 
+from unittest.mock import MagicMock, PropertyMock, patch
+
 import pytest
-from unittest.mock import MagicMock, patch, PropertyMock
 
 pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
@@ -12,9 +13,9 @@ pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 pytest.importorskip("fastapi")
 
 
-from fastapi.testclient import TestClient
+from fastapi.testclient import TestClient  # noqa: E402
 
-from stock_model.web.app import create_app
+from stock_model.web.app import create_app  # noqa: E402
 
 
 @pytest.fixture
@@ -281,8 +282,8 @@ class TestBacktestAPI:
 
     def test_run_backtest_success(self, client):
         """POST /api/backtest 回测成功"""
-        import pandas as pd
         import numpy as np
+        import pandas as pd
 
         # 构造测试数据
         dates = pd.date_range("2024-01-01", periods=100, freq="D")
@@ -338,8 +339,8 @@ class TestPortfolioAPI:
 
     def test_optimize_portfolio_success(self, client):
         """GET /api/portfolio/optimize 成功"""
-        import pandas as pd
         import numpy as np
+        import pandas as pd
 
         dates = pd.date_range("2024-01-01", periods=50, freq="D")
         df = pd.DataFrame(
@@ -403,8 +404,8 @@ class TestQualityAPI:
 
     def test_quality_success(self, client):
         """GET /api/quality/{symbol} 成功"""
-        import pandas as pd
         import numpy as np
+        import pandas as pd
 
         dates = pd.date_range("2024-01-01", periods=50, freq="D")
         df = pd.DataFrame(

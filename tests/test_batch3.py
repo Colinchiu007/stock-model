@@ -314,7 +314,7 @@ class TestWebDashboard:
 
     def test_web_module_init(self):
         """验证模块可导入"""
-        try:
+        import contextlib
+
+        with contextlib.suppress(ImportError):
             import stock_model.web  # noqa: F401
-        except ImportError:
-            pass  # fastapi未安装时正常
