@@ -11,13 +11,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pandas as pd
 import plotly.graph_objects as go
 from loguru import logger
 from plotly.subplots import make_subplots
 
 from stock_model.config.settings import get_settings
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class ChartBuilder:
@@ -33,7 +36,7 @@ class ChartBuilder:
         title: str | None = None,
         show_volume: bool = True,
         show_ma: bool = True,
-        ma_periods: list[int] = [5, 20, 60],
+        ma_periods: list[int] | None = None,
     ) -> go.Figure:
         """
         绘制K线图
@@ -50,6 +53,8 @@ class ChartBuilder:
             Plotly Figure
         """
         title = title or f"{symbol} K线图"
+        if ma_periods is None:
+            ma_periods = [5, 20, 60]
 
         # 创建子图
         rows = 2 if show_volume else 1
@@ -85,7 +90,7 @@ class ChartBuilder:
                             x=df.index,
                             y=df[col_name],
                             name=f"MA{period}",
-                            line=dict(width=1),
+                            line={"width": 1},
                         ),
                         row=1,
                         col=1,
@@ -98,7 +103,7 @@ class ChartBuilder:
                             x=df.index,
                             y=ma_values,
                             name=f"MA{period}",
-                            line=dict(width=1),
+                            line={"width": 1},
                         ),
                         row=1,
                         col=1,
@@ -108,7 +113,7 @@ class ChartBuilder:
         if show_volume and "volume" in df.columns:
             colors = [
                 "red" if close >= open_ else "green"
-                for close, open_ in zip(df["close"], df["open"])
+                for close, open_ in zip(df["close"], df["open"], strict=False)
             ]
             fig.add_trace(
                 go.Bar(
@@ -137,7 +142,7 @@ class ChartBuilder:
         self,
         df: pd.DataFrame,
         symbol: str = "",
-        indicators: list[str] = ["macd", "rsi", "boll"],
+        indicators: list[str] | None = None,
     ) -> go.Figure:
         """
         绘制技术指标图
@@ -150,6 +155,8 @@ class ChartBuilder:
         Returns:
             Plotly Figure
         """
+        if indicators is None:
+            indicators = ["macd", "rsi", "boll"]
         n_indicators = len(indicators)
         # K线 + 指标子图
         fig = make_subplots(
@@ -241,12 +248,12 @@ class ChartBuilder:
 
         if upper_col and lower_col:
             fig.add_trace(
-                go.Scatter(x=df.index, y=df[upper_col], name="BOLL Upper", line=dict(width=1)),
+                go.Scatter(x=df.index, y=df[upper_col], name="BOLL Upper", line={"width": 1}),
                 row=row,
                 col=1,
             )
             fig.add_trace(
-                go.Scatter(x=df.index, y=df[lower_col], name="BOLL Lower", line=dict(width=1)),
+                go.Scatter(x=df.index, y=df[lower_col], name="BOLL Lower", line={"width": 1}),
                 row=row,
                 col=1,
             )
@@ -258,7 +265,7 @@ class ChartBuilder:
                     fill=None,
                     name="BOLL Upper Fill",
                     showlegend=False,
-                    line=dict(width=0),
+                    line={"width": 0},
                 ),
                 row=row,
                 col=1,
@@ -270,7 +277,7 @@ class ChartBuilder:
                     fill="tonexty",
                     name="BOLL Band",
                     showlegend=False,
-                    line=dict(width=0),
+                    line={"width": 0},
                     fillcolor="rgba(128,128,128,0.2)",
                 ),
                 row=row,

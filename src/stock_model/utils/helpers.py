@@ -100,9 +100,7 @@ def calculate_max_drawdown(
     running_max = np.maximum.accumulate(prices)
     # 计算回撤
     drawdowns = (prices - running_max) / running_max
-    max_dd = float(np.min(drawdowns))
-
-    return max_dd
+    return float(np.min(drawdowns))
 
 
 def calculate_win_rate(trades: list[float]) -> float:

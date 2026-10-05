@@ -59,7 +59,7 @@ class SignalNotifier:
         for channel in self._channels:
             try:
                 channel.send(message, result)
-            except Exception as e:
+            except (ValueError, OSError, RuntimeError) as e:
                 logger.error(f"通知通道 {channel.__class__.__name__} 发送失败: {e}")
 
     def _format_message(self, result: StrategyResult) -> str:

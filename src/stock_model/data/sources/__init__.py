@@ -10,4 +10,4 @@ from stock_model.data.sources.akshare_source import AkshareSource
 from stock_model.data.sources.baostock_source import BaostockSource
 from stock_model.data.sources.base import DataSource
 
-__all__ = ["DataSource", "AkshareSource", "BaostockSource"]
+__all__ = ["AkshareSource", "BaostockSource", "DataSource"]

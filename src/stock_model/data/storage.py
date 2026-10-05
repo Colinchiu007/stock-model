@@ -15,12 +15,15 @@ import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
 from loguru import logger
 
 from stock_model.config.settings import get_settings
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @dataclass
@@ -233,10 +236,9 @@ class DataStorage:
                         self._stats.hits += 1
                         logger.debug(f"内存缓存命中(TTL): {key}")
                         return self._memory_cache[key]
-                    else:
-                        # 内存缓存过期，移除
-                        del self._memory_cache[key]
-                        logger.debug(f"内存缓存过期: {key}")
+                    # 内存缓存过期，移除
+                    del self._memory_cache[key]
+                    logger.debug(f"内存缓存过期: {key}")
 
         # 2. 查磁盘缓存
         filepath = self.cache_dir / f"{key}.parquet"
@@ -361,10 +363,9 @@ class DataStorage:
         try:
             if format == "parquet":
                 return pd.read_parquet(filepath)
-            elif format == "csv":
+            if format == "csv":
                 return pd.read_csv(filepath, index_col=0, parse_dates=True)
-            else:
-                raise ValueError(f"不支持的格式: {format}")
-        except Exception as e:
+            raise ValueError(f"不支持的格式: {format}")
+        except (FileNotFoundError, ValueError, OSError) as e:
             logger.error(f"加载数据失败 {filepath}: {e}")
             return None

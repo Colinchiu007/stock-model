@@ -7,4 +7,4 @@ from stock_model.risk.manager import RiskManager
 from stock_model.risk.models import RiskAlert, RiskLevel, RiskType
 from stock_model.risk.position_sizer import PositionSizer
 
-__all__ = ["RiskManager", "RiskAlert", "RiskLevel", "RiskType", "PositionSizer"]
+__all__ = ["PositionSizer", "RiskAlert", "RiskLevel", "RiskManager", "RiskType"]

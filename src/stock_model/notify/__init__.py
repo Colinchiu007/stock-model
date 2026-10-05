@@ -6,4 +6,4 @@
 from stock_model.notify.channels import ConsoleChannel, FileChannel, WebhookChannel
 from stock_model.notify.notifier import SignalNotifier
 
-__all__ = ["SignalNotifier", "ConsoleChannel", "FileChannel", "WebhookChannel"]
+__all__ = ["ConsoleChannel", "FileChannel", "SignalNotifier", "WebhookChannel"]

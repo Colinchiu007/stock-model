@@ -18,13 +18,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import pandas as pd
 from loguru import logger
 
 from stock_model.strategy.base import ActionType, BaseStrategy, StrategyResult
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 @dataclass
@@ -129,8 +131,7 @@ class RLTradingAgent(BaseStrategy):
         """
         if self._trained and self._model is not None:
             return self._predict(symbol, df)
-        else:
-            return self._rule_based(symbol, df)
+        return self._rule_based(symbol, df)
 
     def evaluate(self, symbol: str, df: pd.DataFrame) -> dict:
         """评估策略表现(回测模式)"""
@@ -160,8 +161,8 @@ class RLTradingAgent(BaseStrategy):
         episode_lengths: list[int] = []
         final_values: list[float] = []
 
-        for ep in range(n_episodes):
-            obs, info = env.reset()
+        for _ep in range(n_episodes):
+            obs, _info = env.reset()
             episode_reward = 0.0
             step_count = 0
             done = False
@@ -174,12 +175,12 @@ class RLTradingAgent(BaseStrategy):
                             action = int(action.flat[0])
                         else:
                             action = int(action)
-                    except Exception:
+                    except (ValueError, RuntimeError, IndexError):
                         action = 0  # HOLD as fallback
                 else:
                     action = 0  # 未训练时HOLD
 
-                obs, reward, terminated, truncated, info = env.step(action)
+                obs, reward, terminated, truncated, _info = env.step(action)
                 episode_reward += reward
                 step_count += 1
                 done = terminated or truncated
@@ -202,21 +203,16 @@ class RLTradingAgent(BaseStrategy):
         win_rate = float(np.mean(values_arr > initial_balance))
 
         # 夏普比率(年化)
-        if std_reward > 0:
-            sharpe_ratio = float(mean_reward / std_reward * np.sqrt(252))
-        else:
-            sharpe_ratio = 0.0
+        sharpe_ratio = float(mean_reward / std_reward * np.sqrt(252)) if std_reward > 0 else 0.0
 
         # 最大回撤(基于最终价值序列)
         if len(values_arr) > 1:
             peak = values_arr[0]
             max_dd = 0.0
             for v in values_arr:
-                if v > peak:
-                    peak = v
+                peak = max(peak, v)
                 dd = (peak - v) / peak if peak > 0 else 0.0
-                if dd > max_dd:
-                    max_dd = dd
+                max_dd = max(max_dd, dd)
             max_drawdown = float(max_dd)
         else:
             max_drawdown = 0.0
@@ -560,7 +556,7 @@ class RLTradingAgent(BaseStrategy):
                 reason=f"RL模型({self.model_type})预测: action={int(action)}",
             )
 
-        except Exception as e:
+        except (ValueError, RuntimeError, KeyError) as e:
             logger.warning(f"RL模型预测失败: {e}, 降级为规则策略")
             return self._rule_based(symbol, df)
 
@@ -582,20 +578,19 @@ class RLTradingAgent(BaseStrategy):
                 confidence=0.6,
                 reason="RL降级: 均线多头",
             )
-        elif ma5 < ma20 and current < ma5:
+        if ma5 < ma20 and current < ma5:
             return StrategyResult(
                 symbol=symbol,
                 action=ActionType.SELL,
                 confidence=0.6,
                 reason="RL降级: 均线空头",
             )
-        else:
-            return StrategyResult(
-                symbol=symbol,
-                action=ActionType.HOLD,
-                confidence=0.4,
-                reason="RL降级: 均线纠缠",
-            )
+        return StrategyResult(
+            symbol=symbol,
+            action=ActionType.HOLD,
+            confidence=0.4,
+            reason="RL降级: 均线纠缠",
+        )
 
     @staticmethod
     def _extract_features(df: pd.DataFrame) -> np.ndarray:

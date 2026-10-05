@@ -23,6 +23,39 @@ from typing import Any
 
 from loguru import logger
 
+# ---- 数据模型 (模块级，供FastAPI正确解析请求体) ----
+
+try:
+    from pydantic import BaseModel
+
+    class SignalRequest(BaseModel):
+        symbol: str
+        action: str = "HOLD"
+        confidence: float = 0.5
+        reason: str = ""
+
+    class BacktestRequest(BaseModel):
+        symbol: str
+        strategy_name: str = "manual"
+        start_date: str | None = None
+        end_date: str | None = None
+        initial_cash: float = 100000.0
+
+    class PipelineRunRequest(BaseModel):
+        symbols: list[str] | None = None
+        strategy_names: list[str] | None = None
+
+    class PipelineStartRequest(BaseModel):
+        interval_minutes: int = 30
+        watchlist: list[str] | None = None
+
+except ImportError:
+    # pydantic 未安装时，模型不可用
+    SignalRequest = None  # type: ignore[assignment, misc]
+    BacktestRequest = None  # type: ignore[assignment, misc]
+    PipelineRunRequest = None  # type: ignore[assignment, misc]
+    PipelineStartRequest = None  # type: ignore[assignment, misc]
+
 
 def create_app(config: dict | None = None) -> Any:
     """创建 FastAPI 应用实例
@@ -39,36 +72,12 @@ def create_app(config: dict | None = None) -> Any:
     try:
         from fastapi import FastAPI, HTTPException, Query
         from fastapi.responses import HTMLResponse
-        from pydantic import BaseModel
 
         app = FastAPI(
             title="Stock Model Dashboard",
             description="股票分析与投资模型 - Web Dashboard",
             version="3.0.0",
         )
-
-        # ---- 数据模型 ----
-
-        class SignalRequest(BaseModel):
-            symbol: str
-            action: str = "HOLD"
-            confidence: float = 0.5
-            reason: str = ""
-
-        class BacktestRequest(BaseModel):
-            symbol: str
-            strategy_name: str = "manual"
-            start_date: str | None = None
-            end_date: str | None = None
-            initial_cash: float = 100000.0
-
-        class PipelineRunRequest(BaseModel):
-            symbols: list[str] | None = None
-            strategy_names: list[str] | None = None
-
-        class PipelineStartRequest(BaseModel):
-            interval_minutes: int = 30
-            watchlist: list[str] | None = None
 
         # ---- 应用状态(内存, 生产环境应使用数据库/Redis) ----
 
@@ -85,6 +94,7 @@ def create_app(config: dict | None = None) -> Any:
         }
         _pipeline_instance = None
         _sse_subscribers: list = []
+        _background_tasks: set = set()  # 防止异步任务被GC
 
         # ---- SSE 实时推送 ----
 
@@ -95,7 +105,7 @@ def create_app(config: dict | None = None) -> Any:
             for i, queue in enumerate(_sse_subscribers):
                 try:
                     queue.put_nowait(message)
-                except Exception:
+                except (ValueError, RuntimeError):  # queue full or closed
                     dead.append(i)
             for i in reversed(dead):
                 _sse_subscribers.pop(i)
@@ -144,7 +154,9 @@ def create_app(config: dict | None = None) -> Any:
                     # 异步广播(在事件循环中)
                     try:
                         loop = asyncio.get_event_loop()
-                        loop.create_task(_sse_broadcast("pipeline_result", result_dict))
+                        task = loop.create_task(_sse_broadcast("pipeline_result", result_dict))
+                        _background_tasks.add(task)
+                        task.add_done_callback(_background_tasks.discard)
                     except RuntimeError:
                         pass
 
@@ -204,7 +216,7 @@ def create_app(config: dict | None = None) -> Any:
             if _pipeline_instance is not None:
                 try:
                     state["stats"] = _pipeline_instance.stats
-                except Exception:
+                except (ValueError, RuntimeError):  # queue full or closed
                     state["stats"] = None
             return state
 
@@ -482,13 +494,13 @@ def create_app(config: dict | None = None) -> Any:
 
         return app
 
-    except ImportError:
+    except ImportError as err:
         logger.warning(
             "fastapi 或 uvicorn 未安装，Web Dashboard 不可用。请安装: pip install stock-model[web]"
         )
         raise ImportError(
             "Web Dashboard 需要 fastapi 和 uvicorn。请安装: pip install stock-model[web]"
-        )
+        ) from err
 
 
 def _render_dashboard() -> str:

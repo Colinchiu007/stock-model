@@ -8,4 +8,4 @@ from stock_model.pipeline.config import PipelineConfig
 from stock_model.pipeline.models import PipelineResult, PipelineStatus
 from stock_model.pipeline.trading_pipeline import TradingPipeline
 
-__all__ = ["TradingPipeline", "PipelineConfig", "PipelineResult", "PipelineStatus"]
+__all__ = ["PipelineConfig", "PipelineResult", "PipelineStatus", "TradingPipeline"]

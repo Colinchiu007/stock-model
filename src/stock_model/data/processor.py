@@ -11,9 +11,13 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
-import pandas as pd
 from loguru import logger
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class DataProcessor:
@@ -123,8 +127,7 @@ class DataProcessor:
         # 只聚合存在的列
         agg_dict = {k: v for k, v in ohlc_dict.items() if k in df.columns}
         result = df.resample(freq).agg(agg_dict)
-        result = result.dropna()
-        return result
+        return result.dropna()
 
     @staticmethod
     def normalize(df: pd.DataFrame, columns: list[str] | None = None) -> pd.DataFrame:

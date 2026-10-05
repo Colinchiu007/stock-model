@@ -6,4 +6,4 @@
 from stock_model.portfolio.models import Portfolio, PortfolioWeight
 from stock_model.portfolio.optimizer import PortfolioOptimizer
 
-__all__ = ["PortfolioOptimizer", "Portfolio", "PortfolioWeight"]
+__all__ = ["Portfolio", "PortfolioOptimizer", "PortfolioWeight"]

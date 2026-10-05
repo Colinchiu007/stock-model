@@ -76,8 +76,7 @@ class AkshareSource(DataSource):
     def get_realtime(self, symbol: str) -> pd.DataFrame:
         logger.debug(f"[akshare] 获取实时行情: {symbol}")
         df = ak.stock_zh_a_spot_em()
-        df = df[df["代码"] == symbol]
-        return df
+        return df[df["代码"] == symbol]
 
     def get_stock_info(self, symbol: str) -> pd.DataFrame:
         logger.debug(f"[akshare] 获取股票信息: {symbol}")

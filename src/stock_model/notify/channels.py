@@ -10,10 +10,12 @@ import json
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
-from stock_model.strategy.base import StrategyResult
+if TYPE_CHECKING:
+    from stock_model.strategy.base import StrategyResult
 
 
 class NotificationChannel(ABC):
@@ -108,5 +110,5 @@ class WebhookChannel(NotificationChannel):
 
         except ImportError:
             logger.warning("httpx 未安装，Webhook推送不可用。请安装: pip install httpx")
-        except Exception as e:
+        except (OSError, RuntimeError, TimeoutError) as e:
             logger.error(f"Webhook发送失败: {e}")

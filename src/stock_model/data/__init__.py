@@ -11,11 +11,11 @@ from stock_model.data.sources import AkshareSource, BaostockSource, DataSource
 from stock_model.data.storage import CacheStats, DataStorage
 
 __all__ = [
-    "StockDataFetcher",
-    "DataProcessor",
-    "DataStorage",
-    "CacheStats",
-    "DataSource",
     "AkshareSource",
     "BaostockSource",
+    "CacheStats",
+    "DataProcessor",
+    "DataSource",
+    "DataStorage",
+    "StockDataFetcher",
 ]

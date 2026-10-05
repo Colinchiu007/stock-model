@@ -15,10 +15,9 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
-import pandas as pd
 from loguru import logger
 
 from stock_model.analysis.signals import SignalGenerator
@@ -35,6 +34,11 @@ from stock_model.risk.models import Position, RiskLevel
 from stock_model.risk.position_sizer import PositionSizer
 from stock_model.strategy.base import ActionType, BaseStrategy
 from stock_model.strategy.engine import StrategyEngine
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    import pandas as pd
 
 
 class TradingPipeline:
@@ -226,7 +230,7 @@ class TradingPipeline:
                 quality_score=quality_score,
             )
 
-        except Exception as e:
+        except (ValueError, KeyError, TypeError, RuntimeError) as e:
             logger.error(f"Pipeline执行异常: {symbol} | {e}")
             result = PipelineResult(
                 symbol=symbol,
@@ -239,7 +243,7 @@ class TradingPipeline:
         for callback in self._on_result_callbacks:
             try:
                 callback(result)
-            except Exception as e:
+            except (ValueError, TypeError) as e:
                 logger.warning(f"回调执行异常: {e}")
 
         return result
@@ -307,9 +311,10 @@ class TradingPipeline:
         """获取股票数据"""
         try:
             df = self._fetcher.get_daily(symbol, start_date=self.config.start_date)
-            logger.debug(f"数据获取成功: {symbol}, {len(df)}行")
+            if df is not None:
+                logger.debug(f"数据获取成功: {symbol}, {len(df)}行")
             return df
-        except Exception as e:
+        except (ValueError, KeyError, ConnectionError, RuntimeError) as e:
             logger.error(f"数据获取失败: {symbol} | {e}")
             return None
 
@@ -320,7 +325,7 @@ class TradingPipeline:
             score = report.score
             logger.debug(f"数据质量: {symbol} | 评分={score:.2f}")
             return score
-        except Exception as e:
+        except (ValueError, KeyError, TypeError) as e:
             logger.warning(f"质量检查异常: {symbol} | {e}, 默认通过")
             return 1.0
 
@@ -335,9 +340,8 @@ class TradingPipeline:
                 cost_price=current_price,
                 current_price=current_price,
             )
-            alerts = self._risk_manager.check_position_risk(position)
-            return alerts
-        except Exception as e:
+            return self._risk_manager.check_position_risk(position)
+        except (ValueError, KeyError, TypeError) as e:
             logger.warning(f"风控检查异常: {symbol} | {e}")
             return []
 
@@ -379,7 +383,7 @@ class TradingPipeline:
                 "capital": capital,
                 "position_pct": self.config.position_fixed_pct,
             }
-        except Exception as e:
+        except (ValueError, KeyError, ZeroDivisionError) as e:
             logger.warning(f"仓位计算异常: {symbol} | {e}")
             return {"method": "error", "shares": 0, "error": str(e)}
 

@@ -9,13 +9,15 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import pandas as pd
 from loguru import logger
 
 from stock_model.strategy.base import BaseStrategy, StrategyResult
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 @dataclass
@@ -115,7 +117,7 @@ class QuantStrategy(BaseStrategy):
                     best_params = combo.copy()
                     logger.debug(f"  [{i + 1}/{total}] 新最优: {combo}, {metric}={score:.4f}")
 
-            except Exception as e:
+            except (ValueError, KeyError, TypeError) as e:
                 logger.warning(f"  [{i + 1}/{total}] 参数组合 {combo} 回测失败: {e}")
                 continue
 
@@ -137,7 +139,7 @@ class QuantStrategy(BaseStrategy):
         combos = []
         for combo_values in np.ndindex(*[len(v) for v in values]):
             combo = {}
-            for key, idx in zip(keys, combo_values):
+            for key, idx in zip(keys, combo_values, strict=False):
                 combo[key] = param_grid[key][idx]
             combos.append(combo)
 

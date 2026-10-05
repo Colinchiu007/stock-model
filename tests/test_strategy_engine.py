@@ -36,7 +36,7 @@ def _make_test_df(days: int = 120, trend: str = "up") -> pd.DataFrame:
 
     close = np.maximum(close, 1.0)  # 确保价格为正
 
-    df = pd.DataFrame(
+    return pd.DataFrame(
         {
             "open": close * (1 + np.random.randn(days) * 0.01),
             "high": close * (1 + abs(np.random.randn(days) * 0.02)),
@@ -46,7 +46,6 @@ def _make_test_df(days: int = 120, trend: str = "up") -> pd.DataFrame:
         },
         index=dates,
     )
-    return df
 
 
 class SimpleQuantStrategy(QuantStrategy):
@@ -72,20 +71,19 @@ class SimpleQuantStrategy(QuantStrategy):
                 confidence=0.7,
                 reason="均线多头排列",
             )
-        elif ma5 < ma20 and current < ma5:
+        if ma5 < ma20 and current < ma5:
             return StrategyResult(
                 symbol=symbol,
                 action=ActionType.SELL,
                 confidence=0.7,
                 reason="均线空头排列",
             )
-        else:
-            return StrategyResult(
-                symbol=symbol,
-                action=ActionType.HOLD,
-                confidence=0.4,
-                reason="均线纠缠",
-            )
+        return StrategyResult(
+            symbol=symbol,
+            action=ActionType.HOLD,
+            confidence=0.4,
+            reason="均线纠缠",
+        )
 
 
 # --- Trade 测试 ---
@@ -433,7 +431,7 @@ class TestBacktestAnalysis:
         assert len(results) == 2
         assert "manual" in results
         assert "simple_quant" in results
-        for name, result in results.items():
+        for result in results.values():
             assert isinstance(result, BacktestResult)
 
     def test_trade_analysis_empty_trades(self):
@@ -690,7 +688,7 @@ class TestMultiStockTradingEnv:
         dfs = self._make_multi_dfs(2, days=60)
         env = MultiStockTradingEnv(dfs, initial_balance=100000)
 
-        for ep in range(3):
+        for _ep in range(3):
             obs, info = env.reset()
             for _ in range(10):
                 obs, reward, terminated, truncated, info = env.step([0, 0])

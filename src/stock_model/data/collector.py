@@ -7,13 +7,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-import pandas as pd
 from loguru import logger
 
 from stock_model.data.fetcher import StockDataFetcher
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    import pandas as pd
 
 
 class AutoDataCollector:
@@ -65,10 +69,10 @@ class AutoDataCollector:
             symbols: 股票代码列表
         """
         for symbol in symbols:
-            symbol = symbol.strip()
-            if symbol and symbol not in self._watchlist:
-                self._watchlist.append(symbol)
-                logger.info(f"添加监控: {symbol}")
+            s = symbol.strip()
+            if s and s not in self._watchlist:
+                self._watchlist.append(s)
+                logger.info(f"添加监控: {s}")
 
     def remove_watchlist(self, symbols: list[str]) -> None:
         """移除监控股票"""
@@ -116,13 +120,13 @@ class AutoDataCollector:
                             continue
                         try:
                             cb(symbol, df)
-                        except Exception as e:
+                        except (ValueError, TypeError) as e:
                             logger.warning(f"数据回调执行失败: {e}")
                 else:
                     logger.warning(f"采集 {symbol} 返回空数据")
                     self._error_count += 1
 
-            except Exception as e:
+            except (ValueError, KeyError, ConnectionError, RuntimeError) as e:
                 logger.error(f"采集 {symbol} 失败: {e}")
                 self._error_count += 1
 
@@ -131,7 +135,7 @@ class AutoDataCollector:
                     if isinstance(cb, tuple) and cb[0] == "error":
                         try:
                             cb[1](symbol, e)
-                        except Exception as cb_err:
+                        except (ValueError, TypeError) as cb_err:
                             logger.warning(f"错误回调执行失败: {cb_err}")
 
         logger.info(f"采集完成: 成功={len(results)}, 失败={len(self._watchlist) - len(results)}")

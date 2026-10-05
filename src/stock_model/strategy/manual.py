@@ -7,13 +7,17 @@
 
 from __future__ import annotations
 
-import pandas as pd
+from typing import TYPE_CHECKING
+
 from loguru import logger
 
 from stock_model.analysis.fundamental import FundamentalAnalysis
 from stock_model.analysis.signals import SignalGenerator, SignalStrength, SignalType
 from stock_model.analysis.technical import TechnicalAnalysis
 from stock_model.strategy.base import ActionType, BaseStrategy, StrategyResult
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class ManualStrategy(BaseStrategy):
@@ -192,10 +196,9 @@ class ManualStrategy(BaseStrategy):
 
         if current > ma5 > ma20 > ma60:
             return "up"
-        elif current < ma5 < ma20 < ma60:
+        if current < ma5 < ma20 < ma60:
             return "down"
-        else:
-            return "sideways"
+        return "sideways"
 
     def _calculate_position(self, confidence: float, trend: str) -> float:
         """

@@ -175,7 +175,7 @@ class FundamentalAnalysis:
                     if pb and not pd.isna(pb):
                         score.pb_score = self.score_pb(float(pb))
 
-        except Exception as e:
+        except (ValueError, KeyError, ConnectionError, RuntimeError) as e:
             logger.warning(f"获取估值数据失败: {e}")
 
         # 计算综合评分 (加权平均)
@@ -210,7 +210,7 @@ class FundamentalAnalysis:
             try:
                 score = self.analyze(symbol)
                 results.append(score)
-            except Exception as e:
+            except (ValueError, KeyError, TypeError) as e:
                 logger.error(f"分析 {symbol} 失败: {e}")
 
         # 按综合评分排序

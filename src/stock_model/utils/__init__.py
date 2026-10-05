@@ -7,4 +7,4 @@ from stock_model.utils.helpers import (
 )
 from stock_model.utils.logger import setup_logger
 
-__all__ = ["setup_logger", "format_stock_code", "calculate_sharpe_ratio", "calculate_max_drawdown"]
+__all__ = ["calculate_max_drawdown", "calculate_sharpe_ratio", "format_stock_code", "setup_logger"]
