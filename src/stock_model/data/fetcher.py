@@ -19,16 +19,20 @@
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 
-import pandas as pd
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from stock_model.config.settings import get_settings
 from stock_model.data.sources.akshare_source import AkshareSource
 from stock_model.data.sources.baostock_source import BaostockSource
-from stock_model.data.sources.base import DataSource
 from stock_model.data.storage import DataStorage
+
+if TYPE_CHECKING:
+    import pandas as pd
+
+    from stock_model.data.sources.base import DataSource
 
 # akshare/efinance 常见的连接错误模式，触发自动降级
 _CONNECTION_ERROR_PATTERNS = (
@@ -85,7 +89,7 @@ class StockDataFetcher:
             try:
                 self._fallback_instance = BaostockSource()
                 logger.info("备选数据源: baostock (自动降级已启用)")
-            except Exception as e:
+            except (ImportError, RuntimeError, OSError) as e:
                 logger.warning(f"baostock备选数据源初始化失败: {e}")
                 self._fallback_instance = None
         elif self.source == "baostock":
@@ -97,10 +101,9 @@ class StockDataFetcher:
         """根据名称创建数据源实例"""
         if name == "akshare":
             return AkshareSource()
-        elif name == "baostock":
+        if name == "baostock":
             return BaostockSource()
-        else:
-            raise ValueError(f"不支持的数据源: {name}, 可选: {StockDataFetcher.AVAILABLE_SOURCES}")
+        raise ValueError(f"不支持的数据源: {name}, 可选: {StockDataFetcher.AVAILABLE_SOURCES}")
 
     def _is_connection_error(self, error: Exception) -> bool:
         """判断是否为连接类错误（可降级）
@@ -153,7 +156,7 @@ class StockDataFetcher:
                     logger.info(f"[{self._fallback_instance.name}] {method_name} 降级获取成功")
                     return result
                 logger.warning(f"[{self._fallback_instance.name}] {method_name} 也返回空数据")
-            except Exception as fallback_error:
+            except (ValueError, KeyError, ConnectionError, RuntimeError) as fallback_error:
                 logger.error(
                     f"[{self._fallback_instance.name}] {method_name} 也失败: "
                     f"{fallback_error.__class__.__name__}: {fallback_error}"
@@ -222,9 +225,11 @@ class StockDataFetcher:
         日期和复权参数参与缓存键，确保不同参数不会混淆。
         """
         parts = [method, symbol]
-        for k in ("start_date", "end_date", "adjust"):
-            if k in kwargs and kwargs[k] is not None:
-                parts.append(str(kwargs[k]))
+        parts.extend(
+            str(kwargs[k])
+            for k in ("start_date", "end_date", "adjust")
+            if k in kwargs and kwargs[k] is not None
+        )
         return "_".join(parts)
 
     def _get_with_cache(self, method: str, symbol: str, **kwargs) -> pd.DataFrame:
@@ -248,7 +253,7 @@ class StockDataFetcher:
             try:
                 self._storage.cache_set(key, df)
                 logger.debug(f"已写入缓存: {key}")
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 logger.warning(f"写入缓存失败: {e}")
 
         return df
@@ -391,6 +396,6 @@ class StockDataFetcher:
         for symbol in symbols:
             try:
                 result[symbol] = self.get_daily(symbol, start_date, end_date)
-            except Exception as e:
+            except (ValueError, KeyError, ConnectionError) as e:
                 logger.error(f"获取 {symbol} 数据失败: {e}")
         return result

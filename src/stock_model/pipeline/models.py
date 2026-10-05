@@ -7,10 +7,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from stock_model.risk.models import RiskAlert
-from stock_model.strategy.base import StrategyResult
+if TYPE_CHECKING:
+    from stock_model.risk.models import RiskAlert
+    from stock_model.strategy.base import StrategyResult
 
 
 class PipelineStatus(str, Enum):

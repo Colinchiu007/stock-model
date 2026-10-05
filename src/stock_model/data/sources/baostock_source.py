@@ -78,15 +78,14 @@ class BaostockSource(DataSource):
 
         if symbol.startswith(("6", "9")):
             return f"sh.{symbol}"
-        elif symbol.startswith(("0", "1", "2", "3")):
+        if symbol.startswith(("0", "1", "2", "3")):
             return f"sz.{symbol}"
-        elif symbol.startswith("8"):
+        if symbol.startswith("8"):
             # 北交所，baostock可能不支持
             logger.warning(f"北交所股票 {symbol} 可能不被baostock支持")
             return f"bj.{symbol}"
-        else:
-            logger.warning(f"未知股票代码格式: {symbol}")
-            return f"sz.{symbol}"
+        logger.warning(f"未知股票代码格式: {symbol}")
+        return f"sz.{symbol}"
 
     @staticmethod
     def _normalize_date(date_str: str | None) -> str | None:
@@ -244,8 +243,7 @@ class BaostockSource(DataSource):
         if not data:
             return pd.DataFrame()
 
-        df = pd.DataFrame(data, columns=rs.fields)
-        return df
+        return pd.DataFrame(data, columns=rs.fields)
 
     def get_sector_list(self) -> pd.DataFrame:
         """获取行业板块列表"""
@@ -286,8 +284,7 @@ class BaostockSource(DataSource):
         if not data:
             return pd.DataFrame()
 
-        df = pd.DataFrame(data, columns=rs.fields)
-        return df
+        return pd.DataFrame(data, columns=rs.fields)
 
     def get_valuation(self, symbol: str) -> pd.DataFrame:
         """获取估值数据(PE/PB/PS等)
@@ -356,10 +353,7 @@ class BaostockSource(DataSource):
         # 动态计算最近可用的年份和季度
         now = datetime.now()
         # 如果当前月份<=4月，上年Q4数据可能尚未发布，使用前年Q4
-        if now.month <= 4:
-            default_year = now.year - 2
-        else:
-            default_year = now.year - 1
+        default_year = now.year - 2 if now.month <= 4 else now.year - 1
 
         # 获取盈利数据(roeAvg, npMargin, gpMargin, netProfit, epsTTM等)
         rs = bs.query_profit_data(code=bs_symbol, year=default_year, quarter=4)

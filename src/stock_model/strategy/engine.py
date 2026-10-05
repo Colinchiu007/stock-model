@@ -233,7 +233,7 @@ class BacktestEngine:
             # 执行策略
             try:
                 result = strategy.analyze(symbol, current_df)
-            except Exception as e:
+            except (ValueError, KeyError, TypeError) as e:
                 logger.warning(f"回测第{i}步策略执行失败: {e}")
                 equity_history.append(cash + position * current_price)
                 continue
@@ -558,7 +558,7 @@ class BacktestEngine:
                 result = self.run(strategy, df, symbol)
                 results[strategy.name] = result
                 logger.debug(f"策略比较: {strategy.name} 完成")
-            except Exception as e:
+            except (ValueError, KeyError, TypeError) as e:
                 logger.warning(f"策略比较: {strategy.name} 失败: {e}")
         return results
 
@@ -631,7 +631,7 @@ class StrategyEngine:
                 result = strategy.run(symbol, df)
                 results[name] = result
                 self._update_performance(name, result)
-            except Exception as e:
+            except (ValueError, KeyError, TypeError) as e:
                 logger.error(f"策略 {name} 执行失败: {e}")
         return results
 

@@ -201,8 +201,10 @@ class TechnicalAnalysis:
         df["obv"] = ta.obv(df["close"], df["volume"]) if HAS_PANDAS_TA else np.nan
         return df
 
-    def volume_ma(self, df: pd.DataFrame, periods: list[int] = [5, 10, 20]) -> pd.DataFrame:
+    def volume_ma(self, df: pd.DataFrame, periods: list[int] | None = None) -> pd.DataFrame:
         """计算成交量均线"""
+        if periods is None:
+            periods = [5, 10, 20]
         df = df.copy()
         for period in periods:
             df[f"vol_ma{period}"] = df["volume"].rolling(window=period).mean()

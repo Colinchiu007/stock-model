@@ -10,9 +10,12 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
 
-import pandas as pd
 from loguru import logger
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class ActionType(str, Enum):

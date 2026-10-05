@@ -15,11 +15,13 @@ Gymnasium 交易环境
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
-import pandas as pd
 from loguru import logger
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 # 奖励函数类型
 RewardFn = Callable[["TradingEnv"], float]
@@ -395,9 +397,7 @@ class TradingEnv:
             obs = obs[-expected_len:]
 
         # 处理NaN/Inf
-        obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
-
-        return obs
+        return np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
 
     @property
     def current_step(self) -> int:
