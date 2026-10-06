@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import threading
 import time
 from collections import OrderedDict
@@ -24,6 +25,19 @@ from stock_model.config.settings import get_settings
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def _parquet_engine_available() -> bool:
+    """检测 parquet 读写引擎是否可用
+
+    pandas 的 ``to_parquet`` / ``read_parquet`` 依赖 pyarrow 或 fastparquet。
+    两者都是可选依赖（未在 pyproject 中声明为强制依赖），
+    因此使用前必须探测，缺失时降级到 csv。
+    """
+    return (
+        importlib.util.find_spec("pyarrow") is not None
+        or importlib.util.find_spec("fastparquet") is not None
+    )
 
 
 @dataclass
@@ -346,26 +360,61 @@ class DataStorage:
 
     # ==================== 内部方法 ====================
 
-    def _save(self, df: pd.DataFrame, filepath: Path, format: str) -> None:
-        """保存数据到文件"""
-        filepath.parent.mkdir(parents=True, exist_ok=True)
-        if format == "parquet":
-            df.to_parquet(filepath, index=True)
-        elif format == "csv":
-            df.to_csv(filepath, index=True, encoding="utf-8")
-        else:
-            raise ValueError(f"不支持的格式: {format}")
+    @staticmethod
+    def _resolve_format(filepath: Path, format: str) -> str:
+        """解析实际可用的存储格式
 
-    def _load(self, filepath: Path, format: str) -> pd.DataFrame | None:
-        """从文件加载数据"""
-        if not filepath.exists():
-            return None
+        缺 parquet 引擎时降级为 csv，并把扩展名一起改掉，
+        避免产生 "xxx.parquet" 命名但内容其实是 csv 的误导性文件。
+        """
+        if format == "parquet" and not _parquet_engine_available():
+            logger.debug("未安装 pyarrow/fastparquet，parquet 降级为 csv")
+            return "csv"
+        return format
+
+    @staticmethod
+    def _with_ext(filepath: Path, format: str) -> Path:
+        """按实际格式修正文件扩展名"""
+        if filepath.suffix.lower() == f".{format}":
+            return filepath
+        return filepath.with_suffix(f".{format}")
+
+    def _save(self, df: pd.DataFrame, filepath: Path, format: str) -> None:
+        """保存数据到文件（缺 parquet 引擎时自动降级 csv）"""
+        format = self._resolve_format(filepath, format)
+        filepath = self._with_ext(filepath, format)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
         try:
             if format == "parquet":
-                return pd.read_parquet(filepath)
-            if format == "csv":
-                return pd.read_csv(filepath, index_col=0, parse_dates=True)
-            raise ValueError(f"不支持的格式: {format}")
-        except (FileNotFoundError, ValueError, OSError) as e:
-            logger.error(f"加载数据失败 {filepath}: {e}")
-            return None
+                df.to_parquet(filepath, index=True)
+            elif format == "csv":
+                df.to_csv(filepath, index=True, encoding="utf-8")
+            else:
+                raise ValueError(f"不支持的格式: {format}")
+        except ImportError as e:
+            # 探测与实际调用之间环境可能变化，或引擎存在但损坏
+            logger.warning(f"parquet 写入失败({e})，降级为 csv")
+            filepath = self._with_ext(filepath.with_suffix(".parquet"), "csv")
+            df.to_csv(filepath, index=True, encoding="utf-8")
+
+    def _load(self, filepath: Path, format: str) -> pd.DataFrame | None:
+        """从文件加载数据（缺 parquet 引擎时降级读 csv）"""
+        format = self._resolve_format(filepath, format)
+        # 优先读请求格式；降级场景下同名 .csv 文件才是真实产物
+        candidates = [self._with_ext(filepath, format)]
+        if format != "parquet":
+            candidates.append(filepath)
+
+        for candidate in candidates:
+            if not candidate.exists():
+                continue
+            try:
+                if format == "parquet":
+                    return pd.read_parquet(candidate)
+                if format == "csv":
+                    return pd.read_csv(candidate, index_col=0, parse_dates=True)
+                raise ValueError(f"不支持的格式: {format}")
+            except (FileNotFoundError, ValueError, OSError, ImportError) as e:
+                logger.error(f"加载数据失败 {candidate}: {e}")
+                continue
+        return None
