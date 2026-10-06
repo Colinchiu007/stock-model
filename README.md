@@ -25,6 +25,7 @@ stock-model/
 │   │   └── storage.py         # 数据存储
 │   ├── analysis/              # 分析层
 │   │   ├── technical.py       # 技术分析 (MA/MACD/RSI/KDJ/BOLL)
+│   │   ├── indicators.py      # 纯pandas指标实现 (pandas-ta缺失时兜底)
 │   │   ├── fundamental.py     # 基本面分析 (PE/PB/ROE)
 │   │   └── signals.py         # 信号生成
 │   ├── strategy/              # 策略层
@@ -44,15 +45,22 @@ stock-model/
 │   ├── notify/                # 🆕 信号推送
 │   │   ├── notifier.py        # 信号通知器
 │   │   └── channels.py        # 推送通道 (控制台/文件/Webhook)
+│   ├── pipeline/              # 🆕 交易流水线
+│   │   ├── config.py          # 流水线配置 (YAML支持)
+│   │   ├── models.py          # 执行结果/状态模型
+│   │   └── trading_pipeline.py # 8步编排 (采集→质量→分析→策略→风控→仓位→推送)
 │   ├── visualization/         # 可视化层
 │   │   └── charts.py          # 图表 (Plotly)
 │   ├── web/                   # 🆕 Web Dashboard
-│   │   └── app.py             # FastAPI仪表盘
+│   │   ├── app.py             # FastAPI应用 (Pipeline控制/SSE)
+│   │   ├── screener.py        # 🆕 选股/分析/回测 API
+│   │   └── static/            # 🆕 前端资源 (html/css/js)
 │   └── utils/                 # 工具
 │       ├── logger.py          # 日志 (loguru)
 │       └── helpers.py         # 辅助函数
 ├── examples/                  # 示例脚本
-├── tests/                     # 测试 (185个)
+├── tests/                     # 测试 (497个)
+├── docs/                      # 架构/PRD/复盘文档
 ├── .github/workflows/         # CI/CD (GitHub Actions)
 └── pyproject.toml             # 项目配置
 ```
@@ -72,11 +80,29 @@ pip install -e ".[dev]"
 
 # 可选依赖
 pip install -e ".[quant]"    # 组合优化 (scipy)
-pip install -e ".[ta]"       # 技术分析 (pandas-ta, ta-lib)
 pip install -e ".[schedule]" # 定时采集 (apscheduler)
 pip install -e ".[web]"      # Web Dashboard (fastapi, uvicorn)
 pip install -e ".[rl]"       # 强化学习 (stable-baselines3, torch)
+
+# 技术分析加速 (可选)
+# ⚠️ pandas-ta 仅支持 Python >= 3.12，在 3.10/3.11 上装不上。
+# 不装也能用 —— analysis/indicators.py 提供了纯 pandas 的
+# MACD/RSI/BOLL/ATR/KDJ/OBV 实现，列名与 pandas-ta 对齐。
+# 装它只是数值口径可能与看盘软件更接近，不装则完全可用。
+pip install pandas-ta        # Python >= 3.12 only
 ```
+
+### 启动 Web 仪表盘
+
+```bash
+pip install -e ".[web]"
+uvicorn --app-dir src "stock_model.web.app:create_app" --factory --port 8000
+# 打开 http://localhost:8000
+```
+
+四个标签页：**选股榜**（批量扫描，按信号评分排序）、**个股分析**（指标快照 +
+触发信号 + 60日走势）、**回测 · 交易记录**（逐笔买卖 + 绩效 + 权益曲线）、
+**Pipeline**（定时任务启停与执行历史）。
 
 ### 使用示例
 
@@ -230,10 +256,35 @@ python examples/demo.py
 
 ### 🆕 Web Dashboard (`web/`)
 
-- **FastAPI应用**: 仪表盘 + REST API
-  - 健康检查、信号CRUD、回测执行
-  - 组合优化、数据质量检查
-  - 内嵌HTML仪表盘 (实时刷新)
+前端位于 `web/static/`（index.html + dashboard.css + dashboard.js），
+由 FastAPI 通过 `StaticFiles` 挂载，不再内嵌在 Python 源码中。
+
+**API 端点：**
+
+| 端点 | 用途 |
+|------|------|
+| `GET /api/screener` | 批量扫描，返回按信号评分排序的**选股榜** |
+| `GET /api/analyze/{symbol}` | 指标快照 + 触发信号 + 数据质量 + 60日走势 |
+| `GET /api/backtest/{symbol}` | **逐笔买卖记录** + 绩效指标 + 权益曲线 |
+| `GET /api/portfolio/optimize` | 组合优化 |
+| `GET /api/quality/{symbol}` | 数据质量检查 |
+| `POST /api/pipeline/{start,stop,run}` | 定时流水线控制 |
+| `GET /api/events` | SSE 实时推送 |
+| `GET /api/health` | 健康检查 |
+
+交互式文档：启动服务后访问 `http://localhost:8000/docs`
+
+### 🆕 技术指标 (`analysis/indicators.py`)
+
+纯 pandas/numpy 实现的 MACD / RSI / BOLL / ATR / KDJ / OBV。
+
+存在原因：`pandas-ta` 仅支持 Python >= 3.12，而项目支持 >= 3.10。
+若无回退实现，在 3.10/3.11 上指标列会静默不产生，
+导致信号生成器读不到值、策略对所有股票返回 hold（不报错、不告警）。
+
+本实现的列名与 `pandas-ta` 严格对齐（`MACD_12_26_9` / `RSI_14` /
+`BBL_20_2.0` / `atr14` / `kdj_k`），`technical.py` 会优先使用 pandas-ta，
+缺失时自动回退到此处，上游代码无需改动。
 
 ## 配置
 
@@ -265,14 +316,20 @@ STOCK_DATA_HTTPS_PROXY=http://127.0.0.1:7890
 pytest tests/ -v
 
 # 运行指定模块测试
-pytest tests/test_data_sources.py -v    # 数据源
-pytest tests/test_strategy_engine.py -v # 策略引擎
-pytest tests/test_risk.py -v            # 风险管理
-pytest tests/test_batch2.py -v          # 数据采集+信号推送
-pytest tests/test_batch3.py -v          # 组合优化+RL+Dashboard
+pytest tests/test_data_sources.py -v        # 数据源
+pytest tests/test_strategy_engine.py -v     # 策略引擎
+pytest tests/test_risk.py -v                # 风险管理
+pytest tests/test_trading_pipeline.py -v    # 交易流水线
+pytest tests/test_indicators_and_screener.py -v  # 指标+选股API
+pytest tests/test_bug_regressions.py -v     # 缺陷回归保护
+pytest tests/test_parquet_fallback.py -v    # 缺可选依赖的降级路径
 ```
 
-当前共 **185** 个单元测试，覆盖全部模块。
+当前共 **497** 个测试（488 passed + 9 skipped），代码覆盖率 **83%**。
+
+> **关于跳过的测试**：9 个 skip 均为「可选依赖未安装」类
+> （如 pyarrow / fastapi 未装时相关用例跳过）。**skip 不代表通过**，
+> 本项目已要求关键路径在缺依赖时降级而非跳过，并有对应测试锁定该行为。
 
 ## CI/CD
 

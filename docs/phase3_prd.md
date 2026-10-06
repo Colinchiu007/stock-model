@@ -87,7 +87,7 @@
 - [x] SSE实时推送正常工作
 - [x] UI显示Pipeline状态和控制按钮
 - [x] 内存使用有上限(deque限制)
-- [x] ruff lint 0 errors, 211 tests pass
+- [x] ruff lint 0 errors, 测试通过（详见 docs/bug-reflection-2026-10-06.md）
 
 ### 技术方案
 
@@ -151,7 +151,7 @@
 - [x] PPO/DQN训练可运行
 - [x] 模型save/load正常工作
 - [x] 未安装依赖时降级为规则策略
-- [x] ruff lint 0 errors, 211 tests pass
+- [x] ruff lint 0 errors, 测试通过（详见 docs/bug-reflection-2026-10-06.md）
 
 ### 技术方案
 
@@ -183,7 +183,7 @@
 
 - [x] 批量执行路径日志降级为DEBUG
 - [x] Pipeline关键节点保留INFO
-- [x] 211 tests pass
+- [x] 测试通过（详见 docs/bug-reflection-2026-10-06.md）
 
 ---
 
