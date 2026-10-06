@@ -17,7 +17,6 @@ import re
 
 import pandas as pd
 import pytest
-import tomllib
 
 from stock_model.pipeline.config import PipelineConfig
 from stock_model.pipeline.models import PipelineStatus
@@ -27,6 +26,20 @@ from stock_model.risk.models import Position
 from stock_model.strategy.base import ActionType, BaseStrategy, StrategyResult
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def _read_pyproject_version() -> str:
+    """从 pyproject.toml 提取 [project] 段声明的版本号
+
+    刻意不用 tomllib: 它是 Python 3.11+ 才有的标准库，而本项目
+    requires-python >= 3.10，CI 跑 3.10 矩阵。改用正则保持 3.10 兼容。
+    """
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    # 定位 [project] 段，避免误匹配其他段里的 version
+    project_section = text.split("[project]", 1)[1]
+    match = re.search(r'^version\s*=\s*"([^"]+)"', project_section, re.MULTILINE)
+    assert match, "未能在 pyproject.toml 的 [project] 段找到 version 声明"
+    return match.group(1)
 
 
 class _BuyStrategy(BaseStrategy):
@@ -340,8 +353,7 @@ class TestBug4VersionConsistency:
     def test_pyproject_version_matches_init(self):
         import stock_model
 
-        pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-        declared = pyproject["project"]["version"]
+        declared = _read_pyproject_version()
         actual = stock_model.__version__
 
         assert declared == actual, (
