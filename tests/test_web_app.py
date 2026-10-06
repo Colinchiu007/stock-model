@@ -35,7 +35,7 @@ class TestHealthAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "ok"
-        assert data["version"] == "3.0.0"
+        assert data["version"] == "4.0.0"
         assert "pipeline_status" in data
         assert "timestamp" in data
 

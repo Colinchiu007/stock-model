@@ -13,7 +13,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 from loguru import logger
 
@@ -25,18 +24,29 @@ except ImportError:
     ta = None
     HAS_PANDAS_TA = False
 
+from stock_model.analysis import indicators as fallback_indicators
 from stock_model.config.settings import get_settings
 
 
 class TechnicalAnalysis:
-    """技术分析器"""
+    """技术分析器
+
+    MACD / RSI / BOLL / ATR / OBV 的计算策略:
+      1. 优先使用 pandas-ta（若已安装）
+      2. 缺失时回退到 analysis.indicators 的纯 pandas 实现
+
+    回退是必需的而非可选优化: pandas-ta 仅支持 Python >= 3.12，
+    而本项目支持 >= 3.10。若无回退，在 3.10/3.11 上这些指标列
+    会静默不产生，导致信号生成器永远读不到值、策略恒返回 hold。
+    """
 
     def __init__(self):
         self.settings = get_settings().analysis
         if not HAS_PANDAS_TA:
-            logger.warning(
-                "pandas-ta 未安装，技术指标(MACD/RSI/BOLL/ATR/OBV)不可用。"
-                "请安装: pip install stock-model[ta]"
+            logger.info(
+                "pandas-ta 未安装，使用内置纯 pandas 指标实现"
+                "(MACD/RSI/BOLL/ATR/OBV 功能完整，仅数值口径可能与看盘软件有细微差异)。"
+                "如需 pandas-ta: pip install pandas-ta (需 Python>=3.12)"
             )
 
     # ==================== 趋势指标 ====================
@@ -90,11 +100,12 @@ class TechnicalAnalysis:
         slow = slow or self.settings.macd_slow
         signal = signal or self.settings.macd_signal
 
-        macd_result = (
-            ta.macd(df["close"], fast=fast, slow=slow, signal=signal) if HAS_PANDAS_TA else None
-        )
-        if macd_result is not None:
-            df = pd.concat([df, macd_result], axis=1)
+        if HAS_PANDAS_TA:
+            macd_result = ta.macd(df["close"], fast=fast, slow=slow, signal=signal)
+            if macd_result is not None:
+                df = pd.concat([df, macd_result], axis=1)
+        else:
+            df = fallback_indicators.macd(df, fast=fast, slow=slow, signal=signal)
 
         return df
 
@@ -118,9 +129,12 @@ class TechnicalAnalysis:
         df = df.copy()
         period = period or self.settings.rsi_period
 
-        rsi_result = ta.rsi(df["close"], length=period) if HAS_PANDAS_TA else None
-        if rsi_result is not None:
-            df[f"rsi{period}"] = rsi_result
+        if HAS_PANDAS_TA:
+            rsi_result = ta.rsi(df["close"], length=period)
+            if rsi_result is not None:
+                df[f"rsi{period}"] = rsi_result
+        else:
+            df = fallback_indicators.rsi(df, period=period)
 
         return df
 
@@ -177,20 +191,26 @@ class TechnicalAnalysis:
         period = period or self.settings.boll_period
         std_dev = std_dev or self.settings.boll_std
 
-        boll_result = ta.bbands(df["close"], length=period, std=std_dev) if HAS_PANDAS_TA else None
-        if boll_result is not None:
-            df = pd.concat([df, boll_result], axis=1)
+        if HAS_PANDAS_TA:
+            boll_result = ta.bbands(df["close"], length=period, std=std_dev)
+            if boll_result is not None:
+                df = pd.concat([df, boll_result], axis=1)
+        else:
+            df = fallback_indicators.bollinger(df, period=period, std_dev=std_dev)
 
         return df
 
     def atr(self, df: pd.DataFrame, period: int = 14) -> pd.DataFrame:
         """计算ATR (真实波动范围)"""
         df = df.copy()
-        atr_result = (
-            ta.atr(df["high"], df["low"], df["close"], length=period) if HAS_PANDAS_TA else None
-        )
-        if atr_result is not None:
-            df[f"atr{period}"] = atr_result
+        if HAS_PANDAS_TA:
+            atr_result = ta.atr(df["high"], df["low"], df["close"], length=period)
+            if atr_result is not None:
+                df[f"atr{period}"] = atr_result
+        else:
+            df = fallback_indicators.atr(df, period=period)
+            # 与 pandas-ta 的列名保持一致
+            df[f"atr{period}"] = df[f"ATR_{period}"]
         return df
 
     # ==================== 量价指标 ====================
@@ -198,7 +218,10 @@ class TechnicalAnalysis:
     def obv(self, df: pd.DataFrame) -> pd.DataFrame:
         """计算OBV (能量潮)"""
         df = df.copy()
-        df["obv"] = ta.obv(df["close"], df["volume"]) if HAS_PANDAS_TA else np.nan
+        if HAS_PANDAS_TA:
+            df["obv"] = ta.obv(df["close"], df["volume"])
+        else:
+            df["obv"] = fallback_indicators.obv(df)["OBV"]
         return df
 
     def volume_ma(self, df: pd.DataFrame, periods: list[int] | None = None) -> pd.DataFrame:
