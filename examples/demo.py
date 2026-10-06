@@ -114,9 +114,9 @@ def main():
     metrics = bt_result.metrics
     print(f"    总收益率: {metrics.get('total_return', 0):.2%}")
     print(f"    年化收益率: {metrics.get('annual_return', 0):.2%}")
-    print(f"    夏普比率: {metrics.get('sharpe_ratio', 0):.2f}")
+    print(f"    夏普比率: {metrics.get('sharpe', 0):.2f}")
     print(f"    最大回撤: {metrics.get('max_drawdown', 0):.2%}")
-    print(f"    交易笔数: {metrics.get('trade_count', 0)}")
+    print(f"    交易笔数: {metrics.get('total_trades', 0)}")
 
     # 6. 风险管理
     print(f"\n[8] 风险管理...")

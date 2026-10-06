@@ -191,7 +191,8 @@ class TradingPipeline:
             # Step 6: 风控检查
             risk_alerts: list = []
             if self.config.enable_risk_check and strategy_result.action != ActionType.HOLD:
-                risk_alerts = self._check_risk(symbol, strategy_result)
+                latest_price = float(df["close"].iloc[-1]) if len(df) > 0 else 0.0
+                risk_alerts = self._check_risk(symbol, strategy_result, latest_price)
                 critical_alerts = [a for a in risk_alerts if a.level == RiskLevel.CRITICAL]
                 if critical_alerts:
                     self._record_signal(symbol, strategy_result.action)
@@ -329,16 +330,38 @@ class TradingPipeline:
             logger.warning(f"质量检查异常: {symbol} | {e}, 默认通过")
             return 1.0
 
-    def _check_risk(self, symbol: str, strategy_result) -> list:
-        """风控检查"""
+    def _check_risk(self, symbol: str, strategy_result, current_price: float = 0.0) -> list:
+        """风控检查
+
+        用"拟建仓"视角评估策略建议: 以真实现价作为成本价, 策略给出的
+        止损/止盈价作为阈值, 交给 RiskManager 判定是否需要拦截。
+
+        注意 shares 必须非 0 —— RiskManager.check_position_risk 对
+        shares<=0 的空仓直接短路返回, 若沿用占位的 0 会让风控形同虚设。
+
+        Args:
+            symbol: 股票代码
+            strategy_result: 策略执行结果(提供 stop_loss/take_profit)
+            current_price: 真实现价, 为 0 时回退到 strategy_result.target_price
+
+        Returns:
+            风险警报列表
+        """
         try:
-            # 构建临时持仓(基于策略建议)
-            current_price = strategy_result.target_price or 0.0
+            price = current_price or strategy_result.target_price or 0.0
+            if price <= 0:
+                logger.debug(f"风控跳过: {symbol} 无有效价格")
+                return []
+
+            # 拟建仓: 以现价买入 1 手(100股)作为最小可评估单位
+            # StrategyResult 目前无 take_profit 字段, 用 getattr 兼容未来扩展
             position = Position(
                 symbol=symbol,
-                shares=0,  # 流水线不追踪实际持仓
-                cost_price=current_price,
-                current_price=current_price,
+                shares=self.config.min_shares or 100,
+                cost_price=price,
+                current_price=price,
+                stop_loss=getattr(strategy_result, "stop_loss", None),
+                take_profit=getattr(strategy_result, "take_profit", None),
             )
             return self._risk_manager.check_position_risk(position)
         except (ValueError, KeyError, TypeError) as e:
