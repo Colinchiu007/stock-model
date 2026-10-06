@@ -197,6 +197,22 @@ class TechnicalAnalysis:
         if HAS_PANDAS_TA:
             boll_result = ta.bbands(df["close"], length=period, std=std_dev)
             if boll_result is not None:
+                # pandas-ta 各版本列名不一致:
+                #   0.3.x -> BBL_20_2.0
+                #   0.4.x -> BBL_20_2.0_2.0  (std 后缀被重复追加)
+                # signals.py 按 BBL_/BBU_ 前缀查找, 这里重命名到 period_std 形式。
+                # 用 rename 而非新增列 —— 否则会同时留下新旧两套列名, 造成列数与
+                # 语义在不同环境下不一致。
+                prefixes = ("BBL", "BBM", "BBU", "BBP", "BBB")
+                rename_map: dict[str, str] = {}
+                for col in boll_result.columns:
+                    name = str(col)
+                    prefix = name.split("_", 1)[0]
+                    if prefix in prefixes:
+                        rename_map[name] = f"{prefix}_{period}_{std_dev}"
+                boll_result = boll_result.rename(columns=rename_map)
+                # 去重: 同一 target 列名只保留第一个
+                boll_result = boll_result.loc[:, ~boll_result.columns.duplicated()]
                 df = pd.concat([df, boll_result], axis=1)
         else:
             df = fallback_indicators.bollinger(df, period=period, std_dev=std_dev)

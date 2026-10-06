@@ -58,6 +58,49 @@ def _analyze_via_fallback(ta_obj, df: pd.DataFrame) -> pd.DataFrame:
         return tech_mod.TechnicalAnalysis().analyze_all(df)
 
 
+def _analyze_with_fake_pta(ta_obj, df: pd.DataFrame, version: str) -> pd.DataFrame:
+    """用 mock 模拟指定版本的 pandas-ta, 强制走 pandas-ta 代码路径
+
+    pandas-ta 各版本列名不同(尤其 BOLL), 本地环境装不上(需 Python>=3.12),
+    因此用 mock 复现 CI 上的真实情况:
+      0.3.x -> BBL_20_2.0
+      0.4.x -> BBL_20_2.0_2.0  (std 后缀重复, 实测自 CI 日志)
+    """
+    from unittest.mock import MagicMock, patch
+
+    import stock_model.analysis.technical as tech_mod
+
+    n = len(df)
+    ramp = lambda a, b: np.linspace(a, b, n)  # noqa: E731
+
+    fake = MagicMock()
+    fake.rsi.return_value = pd.Series(ramp(20, 80), name="RSI_14")
+    fake.atr.return_value = pd.Series([0.3] * n)
+    fake.macd.return_value = pd.DataFrame(
+        {
+            "MACD_12_26_9": ramp(0, 1),
+            "MACDs_12_26_9": ramp(0, 0.8),
+            "MACDh_12_26_9": ramp(0, 0.2),
+        }
+    )
+    fake.obv.return_value = pd.Series([1.0] * n)
+
+    if version == "0.3":
+        boll_cols = ["BBL_20_2.0", "BBM_20_2.0", "BBU_20_2.0"]
+    else:
+        boll_cols = [
+            "BBL_20_2.0_2.0",
+            "BBM_20_2.0_2.0",
+            "BBU_20_2.0_2.0",
+            "BBP_20_2.0_2.0",
+            "BBB_20_2.0_2.0",
+        ]
+    fake.bbands.return_value = pd.DataFrame({c: ramp(8, 13) for c in boll_cols})
+
+    with patch.object(tech_mod, "ta", fake), patch.object(tech_mod, "HAS_PANDAS_TA", True):
+        return tech_mod.TechnicalAnalysis().analyze_all(df)
+
+
 # ========================================================================
 # 核心回归：指标必须无条件产出
 # ========================================================================
@@ -140,10 +183,18 @@ class TestIndicatorsAlwaysProduced:
                 )
             }
 
-        assert keys(fallback_df) <= keys(ta_obj.analyze_all(df)), (
-            "纯 pandas 兜底路径产出的列名与 pandas-ta 路径不一致，会导致环境相关行为分叉。"
-            f"仅兜底独有: {sorted(keys(fallback_df) - keys(ta_obj.analyze_all(df)))}"
-        )
+        fallback_keys = keys(fallback_df)
+        for label, ta_df in (
+            ("当前环境", ta_obj.analyze_all(df)),
+            ("模拟 pandas-ta 0.3.x", _analyze_with_fake_pta(ta_obj, df, "0.3")),
+            ("模拟 pandas-ta 0.4.x", _analyze_with_fake_pta(ta_obj, df, "0.4")),
+        ):
+            ta_keys = keys(ta_df)
+            missing = fallback_keys - ta_keys
+            assert not missing, (
+                f"{label} 环境缺少兜底路径产出的列: {sorted(missing)}。"
+                "两条路径的列名必须一致，否则依赖精确列名的代码会环境相关地失效。"
+            )
 
 
 # ========================================================================
