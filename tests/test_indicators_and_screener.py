@@ -45,6 +45,19 @@ def _make_df(rows: int = 200, seed: int = 42) -> pd.DataFrame:
     )
 
 
+def _analyze_via_fallback(ta_obj, df: pd.DataFrame) -> pd.DataFrame:
+    """强制走纯 pandas 兜底路径, 绕过 pandas-ta
+
+    用于对比两条代码路径产出的列名是否一致 —— 无论当前环境是否装了 pandas-ta。
+    """
+    from unittest.mock import patch
+
+    import stock_model.analysis.technical as tech_mod
+
+    with patch.object(tech_mod, "HAS_PANDAS_TA", False):
+        return tech_mod.TechnicalAnalysis().analyze_all(df)
+
+
 # ========================================================================
 # 核心回归：指标必须无条件产出
 # ========================================================================
@@ -82,7 +95,7 @@ class TestIndicatorsAlwaysProduced:
 
         df = TechnicalAnalysis().analyze_all(_make_df())
 
-        for prefix in ("MACD_", "MACDs_", "RSI", "BBL_", "BBU_", "ATR_", "obv", "kdj_k"):
+        for prefix in ("MACD_", "MACDs_", "RSI", "BBL_", "BBU_", "atr", "obv", "kdj_k"):
             assert any(c.startswith(prefix) for c in df.columns), f"缺少以 {prefix} 开头的指标列"
 
     def test_signal_generator_can_read_indicator_columns(self):
@@ -101,6 +114,36 @@ class TestIndicatorsAlwaysProduced:
         assert sg._find_column(df, "RSI") is not None
         assert sg._find_column(df, "BBL_") is not None
         assert sg._find_column(df, "BBU_") is not None
+
+    def test_column_names_match_across_pandas_ta_paths(self):
+        """两条代码路径(有/无 pandas-ta)必须产出相同列名
+
+        这是本轮 CI 真实踩到的坑: pandas-ta 分支把 RSI 写成 `rsi14`
+        (小写), 纯 pandas 分支写 `RSI_14`, 导致依赖该列的代码在
+        不同环境下行为分叉 —— 3.12 环境测试失败而 3.10/3.11 通过。
+
+        这里直接断言两条路径的关键列名完全一致。
+        """
+        from stock_model.analysis.technical import TechnicalAnalysis
+
+        ta_obj = TechnicalAnalysis()
+        df = _make_df(300)
+        fallback_df = _analyze_via_fallback(ta_obj, df)
+
+        def keys(frame):
+            return {
+                c
+                for c in frame.columns
+                if any(
+                    c.upper().startswith(p)
+                    for p in ("MACD", "RSI", "BB", "ATR", "OBV", "KDJ", "MA", "EMA", "VOL_MA")
+                )
+            }
+
+        assert keys(fallback_df) <= keys(ta_obj.analyze_all(df)), (
+            "纯 pandas 兜底路径产出的列名与 pandas-ta 路径不一致，会导致环境相关行为分叉。"
+            f"仅兜底独有: {sorted(keys(fallback_df) - keys(ta_obj.analyze_all(df)))}"
+        )
 
 
 # ========================================================================

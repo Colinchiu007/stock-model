@@ -132,7 +132,10 @@ class TechnicalAnalysis:
         if HAS_PANDAS_TA:
             rsi_result = ta.rsi(df["close"], length=period)
             if rsi_result is not None:
-                df[f"rsi{period}"] = rsi_result
+                # 统一列名为 RSI_{period}：pandas-ta 返回的就是这个名字，
+                # 若写成 rsi{period} 会导致两条代码路径产出的列名不一致，
+                # 依赖该列的代码在有/无 pandas-ta 环境下行为分叉。
+                df[f"RSI_{period}"] = rsi_result
         else:
             df = fallback_indicators.rsi(df, period=period)
 
@@ -209,8 +212,8 @@ class TechnicalAnalysis:
                 df[f"atr{period}"] = atr_result
         else:
             df = fallback_indicators.atr(df, period=period)
-            # 与 pandas-ta 的列名保持一致
-            df[f"atr{period}"] = df[f"ATR_{period}"]
+            # 统一为 atr{period}，与 pandas-ta 分支一致（不保留 ATR_{period}）
+            df[f"atr{period}"] = df.pop(f"ATR_{period}")
         return df
 
     # ==================== 量价指标 ====================

@@ -218,7 +218,7 @@ def register_screener_routes(app: Any) -> None:
                 "boll_upper": _val("BBU_20_2.0"),
                 "boll_mid": _val("BBM_20_2.0"),
                 "boll_lower": _val("BBL_20_2.0"),
-                "atr14": _val("ATR_14"),
+                "atr14": _val("atr14"),
                 "kdj_k": _val("kdj_k"),
                 "kdj_d": _val("kdj_d"),
                 "kdj_j": _val("kdj_j"),
