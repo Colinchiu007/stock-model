@@ -79,7 +79,12 @@ def run_pool(symbols: list[str], start: str, end: str) -> dict | None:
         return None
     rep = e.report(benchmark_symbol=BENCHMARK)
     m = rep["metrics"]
+    if not rep.get("benchmark_available"):
+        print(f"  ⚠️ {start}~{end} 基准 {BENCHMARK} 无数据，超额不可信", flush=True)
     return {
+        "n_symbols": len(e.symbols),
+        "benchmark_ok": rep.get("benchmark_available", False),
+        "dropped": e.dropped_symbols,
         "days": len(steps),
         "trades": len(e.account.trades),
         "strategy": m["total_return"],
@@ -126,6 +131,14 @@ def main() -> None:
     print("=" * 104)
     print("关键结论")
     print("=" * 104)
+    missing = [
+        n
+        for n, _, _ in SCENARIOS
+        if "伪分散" in results.get(n, {}) and not results[n]["伪分散"].get("benchmark_ok")
+    ]
+    if missing:
+        print(f"⚠️ 以下场景基准数据缺失, 超额不可信: {missing}")
+
     up = results.get("上涨市 2019", {})
     if "伪分散" in up and "动态" in up:
         a_old = up["伪分散"]["alpha"]
