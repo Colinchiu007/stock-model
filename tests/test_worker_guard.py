@@ -143,6 +143,9 @@ class TestCreateAppGuard:
 
     def test_guard_runs_before_app_creation(self):
         """守卫必须早于 FastAPI 实例创建 —— 否则多 worker 下已产生副作用"""
+        # 本测试需 patch("fastapi.FastAPI"), 因此依赖 fastapi;
+        # CI 主测试 job 只装 [dev,quant] 不含 fastapi, 必须显式跳过
+        pytest.importorskip("fastapi")
         with patch.object(sys, "argv", ["uvicorn", "app:create_app", "--workers", "4"]):
             with patch("fastapi.FastAPI") as mock_fastapi:
                 with pytest.raises(MultiWorkerNotSupportedError):
