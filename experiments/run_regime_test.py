@@ -19,8 +19,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from stock_model.paper.engine import PaperEngine  # noqa: E402
-from stock_model.strategy.manual import ManualStrategy  # noqa: E402
+from stock_model.paper.engine import PaperEngine
+from stock_model.strategy.manual import ManualStrategy
 
 SYMBOLS = ["000002", "000001", "600036"]
 BENCHMARK = "000002"
