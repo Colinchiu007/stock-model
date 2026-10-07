@@ -94,7 +94,7 @@ ignore = ["ERA001", "PLR2004", "PLR0913", "PLR0912", "PLR0915", "PLC0415", "RUF0
 
 [tool.ruff.lint.per-file-ignores]
 "src/stock_model/web/app.py" = ["E501"]  # HTML template with inline CSS
-"tests/*" = ["NPY002", "RUF059", "N806", "N803", "N817"]  # numpy random, unused unpack, Mock naming in tests
+"tests/*" = ["NPY002", "RUF059", "N806", "N803", "N817", "SIM117"]  # numpy random, unused unpack, Mock naming in tests; SIM117: 嵌套 with 比合并更易读
 
 [tool.mypy]
 python_version = "3.10"
