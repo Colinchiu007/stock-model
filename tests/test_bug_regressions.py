@@ -14,6 +14,7 @@ Bug 引入点:
 
 import pathlib
 import re
+from functools import lru_cache
 
 import pandas as pd
 import pytest
@@ -26,6 +27,15 @@ from stock_model.risk.models import Position
 from stock_model.strategy.base import ActionType, BaseStrategy, StrategyResult
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+@lru_cache(maxsize=1)
+def _src_filename_index() -> frozenset[str]:
+    """src/ 下所有 .py 文件名的索引(只构建一次)
+
+    rglob 在 NFS 工作区上很慢, 逐用例重建曾使单用例耗时 20+ 秒。
+    """
+    return frozenset(p.name for p in (REPO_ROOT / "src").rglob("*.py"))
 
 
 def _read_pyproject_version() -> str:
@@ -394,13 +404,28 @@ class TestGeneralIntegrity:
             importlib.import_module(name)
 
     def test_no_python_syntax_errors_in_repo(self):
-        """所有 .py 文件必须能通过语法解析"""
-        import ast
+        """所有项目源码必须能通过语法解析
 
-        for py_file in REPO_ROOT.rglob("*.py"):
-            if ".venv" in py_file.parts:
-                continue
-            ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+        注意: 用 os.walk 提前剪枝而非 ``rglob`` —— rglob 会先生成全部
+        路径再逐个过滤, 而 .venv 下有数千个包文件, 在 NFS 工作区上
+        仅遍历就要 190 秒(实测), 会拖垮整个测试套件。
+        """
+        import ast
+        import os
+
+        skip_dirs = {".venv", "venv", "__pycache__", ".git", "node_modules"}
+        checked = 0
+        for root, dirs, files in os.walk(REPO_ROOT):
+            # 就地剪枝, 避免进入依赖目录
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
+            for name in files:
+                if not name.endswith(".py"):
+                    continue
+                py_file = pathlib.Path(root) / name
+                ast.parse(py_file.read_text(encoding="utf-8"), filename=str(py_file))
+                checked += 1
+
+        assert checked > 10, f"只检查到 {checked} 个 .py 文件, 遍历范围可能不对"
 
     @pytest.mark.parametrize(
         "doc",
@@ -411,10 +436,16 @@ class TestGeneralIntegrity:
         text = (REPO_ROOT / doc).read_text(encoding="utf-8")
         # 匹配 `xxx.py` 形式的源码引用
         refs = set(re.findall(r"[\w/]+\.py\b", text))
+        if not refs:
+            return
+
+        # 源码文件名索引只构建一次: rglob 在 NFS 工作区上很慢,
+        # 每个用例重建索引曾使单个用例耗时 20+ 秒(实测)。
+        idx = _src_filename_index()
         missing = []
         for ref in refs:
             if "/" in ref and not (REPO_ROOT / ref).exists():
-                # 可能是 strategy/xxx.py 这种简写，尝试在 src 下找
-                if not list((REPO_ROOT / "src").rglob(ref.split("/")[-1])):
+                # 可能是 strategy/xxx.py 这种简写，尝试按文件名在 src 下找
+                if ref.split("/")[-1] not in idx:
                     missing.append(ref)
         assert not missing, f"{doc} 引用了不存在的源码文件: {sorted(missing)}"

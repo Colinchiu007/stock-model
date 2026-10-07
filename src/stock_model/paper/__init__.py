@@ -17,10 +17,16 @@ from stock_model.paper.models import (
     Side,
     Trade,
 )
+from stock_model.paper.universe import (
+    Candidate,
+    UniverseConfig,
+    UniverseSelector,
+)
 
 __all__ = [
     "Account",
     "Broker",
+    "Candidate",
     "EquityPoint",
     "Order",
     "OrderStatus",
@@ -29,6 +35,8 @@ __all__ = [
     "Position",
     "Side",
     "Trade",
+    "UniverseConfig",
+    "UniverseSelector",
     "calc_fees",
     "evaluate",
     "price_limit_pct",
