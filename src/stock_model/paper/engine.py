@@ -29,6 +29,31 @@ if TYPE_CHECKING:
     from stock_model.strategy.base import BaseStrategy
 
 
+def _data_error_types() -> tuple[type[Exception], ...]:
+    """数据获取可能抛出的异常类型
+
+    注意 ``tenacity.RetryError`` 直接继承 ``Exception`` 而**非**
+    ``RuntimeError`` —— 只捕 ``RuntimeError`` 会漏掉它, 导致
+    「取数失败」以未处理异常穿透(实测踩过)。
+    """
+    types: list[type[Exception]] = [
+        ValueError,
+        KeyError,
+        IndexError,
+        RuntimeError,  # fetcher 在取数失败时抛的正是这个
+    ]
+    try:
+        from tenacity import RetryError
+
+        types.append(RetryError)
+    except ImportError:  # pragma: no cover
+        pass
+    return tuple(types)
+
+
+_DATA_ERRORS = _data_error_types()
+
+
 class PaperEngine:
     """模拟盘引擎
 
@@ -49,12 +74,30 @@ class PaperEngine:
         end_date: str | None = None,
         max_position_pct: float = 0.20,
         min_data_rows: int = 60,
+        skip_unavailable: bool = True,
     ) -> None:
-        self.symbols = symbols
+        """构造模拟盘引擎
+
+        Args:
+            skip_unavailable: 池中有股票取不到数据时, 是剔除它们(True)
+                还是直接抛错(False)。**无论该开关如何, 至少要有一只
+                股票可用** —— 全部取不到时一律抛错, 因为"静默跑一个
+                空池"比崩溃更难发现(这是本项目反复出现的缺陷模式)。
+        """
         self.data_source = data_source
         self.start_date = start_date
         self.end_date = end_date
         self.min_data_rows = min_data_rows
+
+        self.dropped_symbols: list[str] = []
+        if len(symbols) > 1:
+            if skip_unavailable:
+                symbols = self._filter_tradable(symbols)
+            else:
+                self._assert_all_tradable(symbols)
+        elif symbols:
+            self._assert_all_tradable(symbols)
+        self.symbols = symbols
 
         self.account = Account(
             account_id="paper-default",
@@ -72,6 +115,55 @@ class PaperEngine:
         logger.info(f"注册策略: {strategy.name}")
 
     # ==================== 数据 ====================
+
+    def _filter_tradable(self, symbols: list[str]) -> list[str]:
+        """剔除在回测区间取不到数据的股票
+
+        次新股/停牌股在某些区间无行情。若不剔除, ``step()`` 会在
+        首次取数时抛 RuntimeError, 整个回测中断。
+        """
+        from stock_model.data.fetcher import StockDataFetcher
+
+        fetcher = StockDataFetcher(source=self.data_source)
+        ok: list[str] = []
+        dropped: list[str] = []
+        for sym in symbols:
+            try:
+                df = fetcher.get_daily(sym, start_date=self.start_date, end_date=self.end_date)
+                if df is not None and not df.empty and len(df) >= self.min_data_rows:
+                    ok.append(sym)
+                else:
+                    dropped.append(sym)
+            except _DATA_ERRORS as e:
+                dropped.append(sym)
+                logger.warning(f"剔除 {sym}: {type(e).__name__}")
+
+        if dropped:
+            self.dropped_symbols = dropped
+            logger.warning(f"区间 {self.start_date}~{self.end_date} 剔除不可用标的: {dropped}")
+        if not ok:
+            raise RuntimeError(f"区间 {self.start_date}~{self.end_date} 内 {symbols} 全部无数据")
+        return ok
+
+    def _assert_all_tradable(self, symbols: list[str]) -> None:
+        """严格模式: 任一股票取不到数据即抛错
+
+        至少要有一只可用 —— 全部不可用时静默继续会产出"空回测"，
+        看起来成功实则毫无意义。
+        """
+        from stock_model.data.fetcher import StockDataFetcher
+
+        fetcher = StockDataFetcher(source=self.data_source)
+        usable = 0
+        for sym in symbols:
+            try:
+                df = fetcher.get_daily(sym, start_date=self.start_date, end_date=self.end_date)
+                if df is not None and not df.empty and len(df) >= self.min_data_rows:
+                    usable += 1
+            except _DATA_ERRORS:
+                continue
+        if usable == 0:
+            raise RuntimeError(f"区间 {self.start_date}~{self.end_date} 内 {symbols} 全部无数据")
 
     def _load(self, symbol: str) -> pd.DataFrame:
         """加载行情(带缓存)"""
@@ -105,9 +197,27 @@ class PaperEngine:
         # 1. 定位今日(各标的按索引推进, 取最短的保证都是 T+1)
         indices = []
         frames = {}
-        for symbol in self.symbols:
-            df = self._bars(symbol)
+        order: list[str] = []
+        for symbol in list(self.symbols):
+            # 单只取数失败不应拖垮整步: 剔除后继续用其余标的
+            try:
+                df = self._bars(symbol)
+            except _DATA_ERRORS as e:
+                logger.warning(f"step: 剔除取数失败标的 {symbol} ({type(e).__name__})")
+                self.symbols = [s for s in self.symbols if s != symbol]
+                if symbol not in self.dropped_symbols:
+                    self.dropped_symbols.append(symbol)
+                continue
+
+            if len(df) < self.min_data_rows:
+                logger.warning(f"step: 剔除数据不足标的 {symbol} ({len(df)}行)")
+                self.symbols = [s for s in self.symbols if s != symbol]
+                if symbol not in self.dropped_symbols:
+                    self.dropped_symbols.append(symbol)
+                continue
+
             frames[symbol] = df
+            order.append(symbol)
             idx = self._cursor.get(symbol, 0) + 1  # T+1: 从昨日位置 +1
             if idx >= len(df):
                 logger.info(f"{symbol} 数据已到最新({df.index[-1].date()}), 无 T+1 可推进")
@@ -115,12 +225,12 @@ class PaperEngine:
             indices.append(idx)
             self._cursor[symbol] = idx
 
-        if not indices:
+        if not indices or not order:
             return {"status": "no_symbols", "date": "", "fills": []}
 
         i = min(indices)  # 用最小索引, 保证不会取到未来日期
-        date = str(frames[self.symbols[0]].index[i].date())
-        today = {s: frames[s].iloc[i] for s in self.symbols}
+        date = str(frames[order[0]].index[i].date())
+        today = {s: frames[s].iloc[i] for s in order}
 
         # 2. 撮合昨日挂单(T+1 开盘价)
         new_day = self.account.last_trade_date != date
@@ -251,22 +361,41 @@ class PaperEngine:
     # ==================== 报告 ====================
 
     def report(self, benchmark_symbol: str | None = None) -> dict[str, Any]:
-        """生成绩效报告(含可靠性提示)"""
+        """生成绩效报告(含可靠性提示)
+
+        基准的取数**独立于回测池**: 基准通常不在 symbols 里(动态池尤其如此),
+        不能依赖 ``_cursor`` 判断推进到哪一天 —— 否则基准为空、超额恒为 0,
+        会得出"改善 39 个百分点"这类完全虚假的结论(实测踩过)。
+        """
         from stock_model.paper.metrics import evaluate
 
         benchmark_prices = None
+        benchmark_return = None
         if benchmark_symbol:
             try:
-                df = self._bars(benchmark_symbol)
-                idx = self._cursor.get(benchmark_symbol, 0)
-                if idx > 0:
-                    closes = df["close"].iloc[: idx + 1]
-                    if len(closes) >= 2:
-                        benchmark_prices = [float(x) for x in closes]
-            except Exception as e:  # pragma: no cover
-                logger.warning(f"基准数据获取失败: {e}")
+                from stock_model.data.fetcher import StockDataFetcher
+
+                fetcher = StockDataFetcher(source=self.data_source)
+                bdf = fetcher.get_daily(
+                    benchmark_symbol, start_date=self.start_date, end_date=self.end_date
+                )
+                if bdf is not None and not bdf.empty and len(bdf) >= 2:
+                    benchmark_prices = [float(x) for x in bdf["close"]]
+                    benchmark_return = benchmark_prices[-1] / benchmark_prices[0] - 1
+            except _DATA_ERRORS as e:
+                logger.warning(f"基准 {benchmark_symbol} 数据获取失败: {e}")
+
+        if benchmark_symbol and benchmark_prices is None:
+            logger.warning(
+                f"基准 {benchmark_symbol} 无数据, 超额收益不可计算 —— 本次报告的 alpha 不可信"
+            )
 
         m = evaluate(self.account, benchmark_prices)
+        if benchmark_return is not None:
+            # 以独立取数的结果为准, 覆盖 metrics 内部可能为 0 的值
+            m.benchmark_return = benchmark_return
+            m.alpha = m.total_return - benchmark_return
+
         return {
             "account": {
                 "initial_capital": self.account.initial_capital,
@@ -277,15 +406,54 @@ class PaperEngine:
                 "position_ratio": round(self.account.position_ratio, 4),
             },
             "metrics": m.to_dict(),
+            "benchmark_available": benchmark_prices is not None,
             "disclaimer": "模拟盘 · 非真实交易, 不构成投资建议",
         }
 
     def run(self, days: int | None = None) -> list[dict[str, Any]]:
-        """连续推进 N 个交易日(None = 直到数据用尽)"""
-        steps = []
+        """连续推进 N 个交易日(None = 直到数据用尽)
+
+        单只股票取数失败不应中断整轮回测 —— 构造时的可用性检查与
+        ``_bars`` 的实际取数路径可能不完全一致(缓存/时间窗差异),
+        故这里再兜一层: 剔除失败标的, 全部失败才抛错。
+        """
+        steps: list[dict[str, Any]] = []
+        last_error: Exception | None = None
+
         for _ in range(days) if days else range(10_000):
-            r = self.step()
+            try:
+                r = self.step()
+            except _DATA_ERRORS as e:
+                # 某只标的取数失败: 剔除后重试, 而不是让整轮崩掉
+                last_error = e
+                if len(self.symbols) <= 1:
+                    raise
+                bad = self._locate_failing_symbol()
+                if bad is None:
+                    raise
+                logger.warning(f"剔除取数失败的标的: {bad} ({type(e).__name__})")
+                self.symbols = [s for s in self.symbols if s != bad]
+                self.dropped_symbols.append(bad)
+                self._data_cache.pop(bad, None)
+                continue
+
             if r["status"] != "ok":
                 break
             steps.append(r)
+
+        if not steps and last_error is not None:
+            raise RuntimeError(f"回测未能推进任何交易日: {last_error}") from last_error
         return steps
+
+    def _locate_failing_symbol(self) -> str | None:
+        """定位哪只股票取数失败(逐只重试)"""
+        for sym in list(self._data_cache.keys()):
+            try:
+                self._fetch_metrics_for(sym)
+            except _DATA_ERRORS:
+                return sym
+        return None
+
+    def _fetch_metrics_for(self, symbol: str) -> Any:
+        """触发一次取数(用于探测可用性)"""
+        return self._load(symbol)

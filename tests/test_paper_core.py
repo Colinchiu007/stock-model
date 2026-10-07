@@ -493,3 +493,74 @@ class TestDateWindow:
 
         _, kwargs = fake_fetcher.get_daily.call_args
         assert kwargs.get("end_date") is None
+
+
+# ==================== 不可用标的剔除 ====================
+
+
+class TestUnavailableSymbolHandling:
+    """次新股/停牌股必须被剔除, 而不是让整个回测崩溃
+
+    实测教训: 动态池含次新股, 用 2026 年的池子回测 2019 年时,
+    部分标的当时未上市 -> get_daily 抛 RuntimeError -> 整个实验中断。
+    """
+
+    def test_constructor_filters_unavailable(self):
+        """构造时应剔除取不到数据的股票"""
+        from unittest.mock import MagicMock, patch
+
+        from stock_model.paper.engine import PaperEngine
+
+        def fake_get_daily(sym, **kwargs):
+            if sym == "300999":  # 模拟次新股
+                raise RuntimeError("数据获取失败")
+            df = MagicMock()
+            df.empty = False
+            df.__len__ = lambda self=0: 100
+            return df
+
+        fake_fetcher = MagicMock()
+        fake_fetcher.get_daily.side_effect = fake_get_daily
+
+        with patch("stock_model.data.fetcher.StockDataFetcher", return_value=fake_fetcher):
+            e = PaperEngine(symbols=["000002", "300999", "600036"], min_data_rows=60)
+
+        assert "300999" not in e.symbols, "取不到数据的股票应被剔除"
+        assert "300999" in e.dropped_symbols
+        assert len(e.symbols) == 2
+
+    def test_strict_mode_raises(self):
+        """单只标的时不自动剔除(会误伤), 应直接抛错"""
+        from unittest.mock import MagicMock, patch
+
+        from stock_model.paper.engine import PaperEngine
+
+        def boom(*a, **k):
+            raise RuntimeError("数据获取失败")
+
+        fake_fetcher = MagicMock()
+        fake_fetcher.get_daily.side_effect = boom
+
+        with (
+            patch("stock_model.data.fetcher.StockDataFetcher", return_value=fake_fetcher),
+            pytest.raises(RuntimeError, match="全部无数据"),
+        ):
+            PaperEngine(symbols=["000002"], skip_unavailable=False)
+
+    def test_all_unavailable_raises_clear_error(self):
+        """全部取不到数据时给出明确错误, 不是静默返回空"""
+        from unittest.mock import MagicMock, patch
+
+        from stock_model.paper.engine import PaperEngine
+
+        def boom(*a, **k):
+            raise RuntimeError("数据获取失败")
+
+        fake_fetcher = MagicMock()
+        fake_fetcher.get_daily.side_effect = boom
+
+        with (
+            patch("stock_model.data.fetcher.StockDataFetcher", return_value=fake_fetcher),
+            pytest.raises(RuntimeError, match="全部无数据"),
+        ):
+            PaperEngine(symbols=["000002", "600036"])
