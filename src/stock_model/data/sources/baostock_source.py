@@ -36,6 +36,11 @@ class BaostockSource(DataSource):
     name = "baostock"
 
     # 线程锁，确保login/logout线程安全
+    #
+    # 重要: baostock 是全局单连接, query_* 系列接口本身不线程安全 ——
+    # 多线程并发查询会互相抢占响应导致 RuntimeError/数据错乱。
+    # 因此调用方(如 web/screener.py 的批量扫描)对 baostock 必须串行执行;
+    # akshare 走 HTTP, 可以并发。这里只锁会话生命周期, 不替代调用方的串行化。
     _lock = threading.Lock()
     _logged_in = False
 

@@ -80,6 +80,10 @@ rl = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# Web 前端资源必须随包安装, 否则 pip 安装后 static/ 丢失导致仪表盘 404
+"stock_model.web" = ["static/*.html", "static/*.css", "static/*.js"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"

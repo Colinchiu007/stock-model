@@ -296,21 +296,35 @@ class TestWebDashboard:
             pass
 
     def test_render_dashboard_html(self):
+        """仪表盘首页结构
+
+        注: 页面已于 v4.0 重构并拆分到 web/static/ 下，
+        断言随之更新为新页面的结构特征。
+        """
         from stock_model.web.app import _render_dashboard
 
         html = _render_dashboard()
         assert "<!DOCTYPE html>" in html
-        assert "Stock Model Dashboard" in html
-        assert "api/health" in html
-        assert "api/signals" in html
-        assert "api/backtest" in html
+        assert "Stock Model" in html
+        # 四个功能标签页
+        assert 'data-tab="screener"' in html
+        assert 'data-tab="backtest"' in html
+        assert 'data-tab="pipeline"' in html
+        # 静态资源引用
+        assert "/static/dashboard.css" in html
+        assert "/static/dashboard.js" in html
+        # 核心交互入口
+        assert 'id="btn-scan"' in html
+        assert 'id="btn-backtest"' in html
 
     def test_dashboard_has_chinese(self):
         from stock_model.web.app import _render_dashboard
 
         html = _render_dashboard()
-        assert "暂无信号" in html
-        assert "暂无回测结果" in html
+        assert "选股榜" in html
+        assert "个股分析" in html
+        assert "回测" in html
+        assert "Pipeline" in html
 
     def test_web_module_init(self):
         """验证模块可导入"""

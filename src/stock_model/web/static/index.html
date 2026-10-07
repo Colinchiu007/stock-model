@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stock Model · 量化选股</title>
+<link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <h1>Stock Model</h1>
+    <span class="tag">A股量化选股</span>
+  </div>
+  <div class="topbar-meta">
+    <span id="health-dot" class="dot"></span>
+    <span id="health-text">连接中…</span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="screener">选股榜</button>
+  <button class="tab" data-tab="detail">个股分析</button>
+  <button class="tab" data-tab="backtest">回测 · 交易记录</button>
+  <button class="tab" data-tab="pipeline">Pipeline</button>
+</nav>
+
+<main>
+
+  <!-- ============ 选股榜 ============ -->
+  <section class="panel active" id="panel-screener">
+    <div class="toolbar">
+      <label>股票池</label>
+      <input type="text" id="sc-symbols" value="000001,000002,600036,000651,600519"
+             placeholder="逗号分隔，如 000001,600036">
+      <label>数据源</label>
+      <select id="sc-source">
+        <option value="baostock" selected>baostock(稳)</option>
+        <option value="akshare">akshare</option>
+      </select>
+      <label>起始日</label>
+      <input type="text" id="sc-start" value="20240101" placeholder="YYYYMMDD">
+      <button class="btn primary" id="btn-scan">开始扫描</button>
+    </div>
+
+    <div id="sc-summary" class="summary hidden"></div>
+    <div id="sc-loading" class="loading hidden">
+      <div class="spinner"></div><span>扫描中，请稍候…（每只股票需拉取行情数据）</span>
+    </div>
+
+    <table class="table" id="sc-table">
+      <thead>
+        <tr>
+          <th>代码</th><th>建议</th><th>评分</th><th>信心</th>
+          <th class="num">现价</th><th class="num">目标价</th><th class="num">止损</th>
+          <th class="num">仓位%</th><th>趋势</th><th>触发信号</th><th></th>
+        </tr>
+      </thead>
+      <tbody id="sc-body">
+        <tr class="empty-row"><td colspan="11">点击「开始扫描」获取选股结果</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ============ 个股分析 ============ -->
+  <section class="panel" id="panel-detail">
+    <div class="toolbar">
+      <label>股票代码</label>
+      <input type="text" id="dt-symbol" value="000001" placeholder="如 000001">
+      <label>数据源</label>
+      <select id="dt-source">
+        <option value="baostock" selected>baostock</option>
+        <option value="akshare">akshare</option>
+      </select>
+      <button class="btn primary" id="btn-detail">分析</button>
+    </div>
+    <div id="dt-loading" class="loading hidden"><div class="spinner"></div><span>分析中…</span></div>
+    <div id="dt-content"></div>
+  </section>
+
+  <!-- ============ 回测 / 交易记录 ============ -->
+  <section class="panel" id="panel-backtest">
+    <div class="toolbar">
+      <label>股票代码</label>
+      <input type="text" id="bt-symbol" value="000002" placeholder="如 000002">
+      <label>初始资金</label>
+      <input type="number" id="bt-cash" value="100000" step="10000">
+      <label>数据源</label>
+      <select id="bt-source">
+        <option value="baostock" selected>baostock</option>
+        <option value="akshare">akshare</option>
+      </select>
+      <button class="btn primary" id="btn-backtest">运行回测</button>
+    </div>
+    <div id="bt-loading" class="loading hidden"><div class="spinner"></div><span>回测中…</span></div>
+    <div id="bt-content"></div>
+  </section>
+
+  <!-- ============ Pipeline ============ -->
+  <section class="panel" id="panel-pipeline">
+    <div class="toolbar">
+      <label>监控列表</label>
+      <input type="text" id="pl-watchlist" value="000001,600036">
+      <label>间隔(分)</label>
+      <input type="number" id="pl-interval" value="30" min="1" max="1440" style="width:80px">
+      <button class="btn primary" id="pl-start">启动</button>
+      <button class="btn danger" id="pl-stop">停止</button>
+      <button class="btn" id="pl-run">单次执行</button>
+    </div>
+
+    <div class="cards">
+      <div class="card"><div class="card-label">运行状态</div><div class="card-value" id="pl-status">—</div></div>
+      <div class="card"><div class="card-label">累计运行</div><div class="card-value" id="pl-runs">0</div></div>
+      <div class="card"><div class="card-label">监控数</div><div class="card-value" id="pl-symbols">0</div></div>
+    </div>
+
+    <h3 class="section-title">执行历史</h3>
+    <table class="table" id="pl-table">
+      <thead><tr><th>时间</th><th>代码</th><th>状态</th><th>动作</th><th>信心</th><th>质量</th><th>说明</th></tr></thead>
+      <tbody id="pl-body"><tr class="empty-row"><td colspan="7">暂无记录</td></tr></tbody>
+    </table>
+  </section>
+
+</main>
+
+<script src="/static/dashboard.js"></script>
+</body>
+</html>
