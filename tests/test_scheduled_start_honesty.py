@@ -93,14 +93,14 @@ class TestCollectorStartFailureIsVisible:
         """
         collector = AutoDataCollector(fetcher=MagicMock())
 
-        with _block_apscheduler(), pytest.raises((ImportError, RuntimeError)):
+        with _block_apscheduler(), pytest.raises(ImportError):
             collector.start(interval_minutes=30)
 
     def test_collector_not_running_after_failed_start(self):
         """启动失败后 _running 必须仍为 False"""
         collector = AutoDataCollector(fetcher=MagicMock())
 
-        with _block_apscheduler(), pytest.raises((ImportError, RuntimeError)):
+        with _block_apscheduler(), pytest.raises(ImportError):
             collector.start(interval_minutes=30)
 
         assert collector.is_running is False
@@ -110,7 +110,7 @@ class TestCollectorStartFailureIsVisible:
         """异常信息必须点名缺哪个包，便于用户自助排障"""
         collector = AutoDataCollector(fetcher=MagicMock())
 
-        with _block_apscheduler(), pytest.raises((ImportError, RuntimeError)) as exc:
+        with _block_apscheduler(), pytest.raises(ImportError) as exc:
             collector.start(interval_minutes=30)
 
         assert "apscheduler" in str(exc.value).lower(), (
@@ -133,7 +133,7 @@ class TestPipelineStartDoesNotLie:
         )
         pipeline.add_strategy(_NoopStrategy())
 
-        with _block_apscheduler(), pytest.raises((ImportError, RuntimeError)):
+        with _block_apscheduler(), pytest.raises(ImportError):
             pipeline.start_scheduled(interval_minutes=30)
 
     def test_pipeline_not_running_after_failed_start(self):
@@ -143,7 +143,7 @@ class TestPipelineStartDoesNotLie:
         )
         pipeline.add_strategy(_NoopStrategy())
 
-        with _block_apscheduler(), pytest.raises((ImportError, RuntimeError)):
+        with _block_apscheduler(), pytest.raises(ImportError):
             pipeline.start_scheduled(interval_minutes=30)
 
         assert pipeline.is_running is False, (
@@ -161,7 +161,7 @@ class TestPipelineStartDoesNotLie:
         )
         pipeline.add_strategy(_NoopStrategy())
 
-        with _block_apscheduler(), pytest.raises((ImportError, RuntimeError)):
+        with _block_apscheduler(), pytest.raises(ImportError):
             pipeline.start_scheduled(interval_minutes=30)
 
         # 直接篡改底层状态，验证 is_running 不为 True
@@ -189,13 +189,17 @@ def client():
 class TestWebStartEndpointHonesty:
     """/api/pipeline/start 必须在启动失败时报错，而非返回 started"""
 
-    def test_start_endpoint_raises_500_when_scheduler_missing(self, client):
-        """缺 apscheduler 时端点必须返回错误，不能返回 started/running"""
+    def test_start_endpoint_raises_503_when_scheduler_missing(self, client):
+        """缺 apscheduler 时端点必须返回 503，不能返回 started/running
+
+        503 Service Unavailable 语义上比 500 更准确:
+        服务本身正常, 只是缺一个可选依赖。
+        """
         with _block_apscheduler():
             resp = client.post("/api/pipeline/start", json={"interval_minutes": 30})
 
         assert resp.status_code != 200, f"启动失败却返回 200: {resp.json()} —— 用户会以为已在运行"
-        assert resp.status_code == 500
+        assert resp.status_code == 503
 
     def test_status_not_running_after_failed_start(self, client):
         """启动失败后 status 端点必须报告非 running"""

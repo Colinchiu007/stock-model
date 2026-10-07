@@ -20,6 +20,16 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
+class MissingDependencyError(ImportError):
+    """缺少可选依赖时抛出
+
+    继承 ``ImportError`` 而非 ``RuntimeError``：
+    历史实现是静默返回, 调用方(包括既有测试)习惯用
+    ``except ImportError`` 兜底, 继承它可保持向后兼容。
+    语义上它确实表示「某个包没装」, 比 RuntimeError 更准确。
+    """
+
+
 class AutoDataCollector:
     """自动数据采集器
 
@@ -148,12 +158,13 @@ class AutoDataCollector:
             interval_minutes: 采集间隔(分钟)
 
         Raises:
-            RuntimeError: apscheduler 未安装时。
+            MissingDependencyError: apscheduler 未安装时。
 
-            此前此处在缺依赖时只 log 一条 WARNING 便静默返回,
-            导致上游(pipeline / web API)误判为"已启动",
-            用户看到界面显示运行中但实际无任何任务执行。
-            启动失败必须显式抛出,由调用方决定如何告知用户。
+                继承自 ImportError 以保持向后兼容 —— 此前此处在缺依赖时
+                静默返回, 既有测试用 `except ImportError` 兜底。
+                改为抛出可让调用方(pipeline / web API)感知失败,
+                避免"界面显示运行中但实际没跑"的假成功。
+
         """
         if self._running:
             logger.warning("定时采集已在运行")
@@ -162,7 +173,7 @@ class AutoDataCollector:
         try:
             from apscheduler.schedulers.background import BackgroundScheduler
         except ImportError as err:
-            raise RuntimeError(
+            raise MissingDependencyError(
                 "定时采集不可用: 未安装 apscheduler。请执行 "
                 "`pip install apscheduler` 或 `pip install stock-model[schedule]`；"
                 "也可调用 collect_now() 手动触发采集。"

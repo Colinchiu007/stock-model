@@ -128,6 +128,7 @@ def create_app(config: dict | None = None) -> Any:
         async def start_pipeline(req: PipelineStartRequest):
             """启动Pipeline定时执行"""
             try:
+                from stock_model.data.collector import MissingDependencyError
                 from stock_model.pipeline.config import PipelineConfig
                 from stock_model.pipeline.trading_pipeline import TradingPipeline
                 from stock_model.strategy.manual import ManualStrategy
@@ -181,7 +182,7 @@ def create_app(config: dict | None = None) -> Any:
                 # "未启动" 伪装成 "已启动"。
                 if not pipeline.is_running:
                     pipeline.stop()
-                    raise RuntimeError(
+                    raise MissingDependencyError(
                         "Pipeline启动失败: 调度器未进入运行状态"
                         "(可能未安装 apscheduler, 请执行 pip install apscheduler)"
                     )
@@ -207,6 +208,9 @@ def create_app(config: dict | None = None) -> Any:
 
             except HTTPException:
                 raise
+            except MissingDependencyError as e:
+                logger.warning(f"Pipeline启动失败(缺可选依赖): {e}")
+                raise HTTPException(status_code=503, detail=str(e)) from e
             except Exception as e:
                 logger.error(f"Pipeline启动失败: {e}")
                 raise HTTPException(status_code=500, detail=str(e)) from e

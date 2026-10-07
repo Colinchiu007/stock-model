@@ -22,7 +22,7 @@ from loguru import logger
 
 from stock_model.analysis.signals import SignalGenerator
 from stock_model.analysis.technical import TechnicalAnalysis
-from stock_model.data.collector import AutoDataCollector
+from stock_model.data.collector import AutoDataCollector, MissingDependencyError
 from stock_model.data.fetcher import StockDataFetcher
 from stock_model.data.monitor import DataQualityMonitor
 from stock_model.notify.channels import ConsoleChannel
@@ -292,10 +292,10 @@ class TradingPipeline:
             interval_minutes: 采集间隔(分钟)
 
         Raises:
-            RuntimeError: 调度器启动失败(如未安装 apscheduler)。
+            MissingDependencyError: 调度器启动失败(如未安装 apscheduler)。
 
-            底层 collector.start() 失败时必须向上传播,
-            否则本方法会照常打印"已启动",让调用方与用户都误以为定时任务在跑。
+                底层 collector.start() 失败时必须向上传播,
+                否则本方法会照常打印"已启动",让调用方与用户都误以为定时任务在跑。
         """
         self._collector.add_watchlist(self.config.watchlist)
         self._collector.on_data(self._on_data_callback)
@@ -303,7 +303,7 @@ class TradingPipeline:
 
         if not self.is_running:
             # 防御: collector 返回了但实际未运行, 绝不能谎报成功
-            raise RuntimeError("定时执行启动失败: 调度器未进入运行状态")
+            raise MissingDependencyError("定时执行启动失败: 调度器未进入运行状态")
 
         logger.info(f"Pipeline定时执行已启动, 间隔{interval_minutes}分钟")
 
