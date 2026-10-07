@@ -59,6 +59,98 @@ except ImportError:
     PipelineStartRequest = None  # type: ignore[assignment, misc]
 
 
+class MultiWorkerNotSupportedError(RuntimeError):
+    """检测到多 worker 部署时抛出
+
+    本应用的 pipeline 状态、信号历史与 SSE 订阅者都保存在**进程内**,
+    且 TradingPipeline 持有真实的后台调度器(APScheduler 线程)。
+    多 worker 下各进程互不可见, 会产生两类问题:
+
+      1. 状态不一致 —— 同一界面刷新到不同 worker 显示不同状态
+      2. SSE 断流   —— 信号由产生它的那个 worker 广播, 连到别的 worker 的客户端收不到
+
+    更危险的是「只把状态放进 Redis」这种半吊子修法: 面板会显示"已停止",
+    而持有调度器的那个 worker 仍在运行 —— 比状态不一致更糟。
+
+    正确解法是把 pipeline 抽为独立单例服务(web 只做无状态网关),
+    属架构级改造, 不在当前范围内。在此之前, 明确拒绝多 worker 启动,
+    好过让使用者踩坑。
+    """
+
+
+def _detect_worker_count() -> int:
+    """探测当前启动方式下的 worker 数量
+
+    覆盖三条常见路径:
+      - ``uvicorn --workers N``
+      - ``gunicorn -w N`` (含 GUNICORN_CMD_ARGS)
+      - ``WEB_CONCURRENCY=N`` (gunicorn 传统环境变量)
+
+    识别不了时返回 1(放行) —— 守卫的目的是拦截已知危险配置,
+    不能因为识别不出就误伤正常启动。
+    """
+    import os
+    import sys
+
+    # 1) 命令行: uvicorn --workers N / gunicorn -w N
+    argv = sys.argv
+    for i, arg in enumerate(argv):
+        if arg == "--workers" and i + 1 < len(argv):
+            try:
+                return int(argv[i + 1])
+            except ValueError:
+                pass
+        if arg.startswith("--workers="):
+            try:
+                return int(arg.split("=", 1)[1])
+            except ValueError:
+                pass
+        # gunicorn 短参数: -w 4
+        if arg == "-w" and i + 1 < len(argv):
+            try:
+                return int(argv[i + 1])
+            except ValueError:
+                pass
+
+    # 2) 环境变量: GUNICORN_CMD_ARGS="--workers=4"
+    for arg in os.environ.get("GUNICORN_CMD_ARGS", "").split():
+        if arg.startswith("--workers="):
+            try:
+                return int(arg.split("=", 1)[1])
+            except ValueError:
+                pass
+
+    # 3) gunicorn -w 4 / WEB_CONCURRENCY=4
+    raw = os.environ.get("WEB_CONCURRENCY", "").strip()
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            pass
+
+    return 1
+
+
+def _assert_single_worker() -> None:
+    """多 worker 启动时直接拒绝
+
+    Raises:
+        MultiWorkerNotSupportedError: 检测到多 worker 时
+    """
+    workers = _detect_worker_count()
+    if workers > 1:
+        raise MultiWorkerNotSupportedError(
+            f"检测到 {workers} 个 worker, 但本应用不支持多 worker 部署。\n"
+            "原因: pipeline 状态 / 信号历史 / SSE 订阅者均保存在进程内存, "
+            "且 TradingPipeline 持有真实后台调度器, 多进程间无法共享。\n"
+            "请以单 worker 启动:\n"
+            '    uvicorn --app-dir src "stock_model.web.app:create_app" '
+            "--factory --port 8000\n"
+            "若确需多 worker, 须先将 pipeline 抽为独立单例服务"
+            "(参见 docs/phase3_prd.md TD-01)。"
+        )
+
+
 def create_app(config: dict | None = None) -> Any:
     """创建 FastAPI 应用实例
 
@@ -70,7 +162,10 @@ def create_app(config: dict | None = None) -> Any:
 
     Raises:
         ImportError: fastapi 未安装时
+        MultiWorkerNotSupportedError: 检测到多 worker 部署时
     """
+    _assert_single_worker()
+
     try:
         from fastapi import FastAPI, HTTPException, Query
         from fastapi.responses import HTMLResponse
