@@ -18,13 +18,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import pandas as pd  # noqa: E402
+import pandas as pd
 
-from stock_model.analysis.signals import SignalGenerator  # noqa: E402
-from stock_model.data.fetcher import StockDataFetcher  # noqa: E402
-from stock_model.paper.broker import Broker  # noqa: E402
-from stock_model.paper.engine import PaperEngine  # noqa: E402
-from stock_model.paper.models import Account, Order, OrderStatus, Side  # noqa: E402
+from stock_model.analysis.signals import SignalGenerator
+from stock_model.paper.engine import PaperEngine
 
 SYMBOLS = ["000002", "000001", "600036"]
 BENCHMARK = "000002"
@@ -40,7 +37,6 @@ class ThresholdStrategy:
     """
 
     def __init__(self, threshold: int = 3):
-        from stock_model.analysis.signals import SignalGenerator
         from stock_model.analysis.technical import TechnicalAnalysis
 
         self.threshold = threshold
@@ -54,12 +50,8 @@ class ThresholdStrategy:
         enriched = self.ta.analyze_all(df)
         signals = self.sg.generate_all(enriched, symbol)
 
-        buy = sum(
-            WEIGHTS[s.strength.value] for s in signals if s.signal_type.value == "buy"
-        )
-        sell = sum(
-            WEIGHTS[s.strength.value] for s in signals if s.signal_type.value == "sell"
-        )
+        buy = sum(WEIGHTS[s.strength.value] for s in signals if s.signal_type.value == "buy")
+        sell = sum(WEIGHTS[s.strength.value] for s in signals if s.signal_type.value == "sell")
         net = buy - sell
         th = self.threshold
 
