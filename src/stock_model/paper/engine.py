@@ -46,12 +46,14 @@ class PaperEngine:
         initial_capital: float = 10000.0,
         data_source: str = "baostock",
         start_date: str = "20240101",
+        end_date: str | None = None,
         max_position_pct: float = 0.20,
         min_data_rows: int = 60,
     ) -> None:
         self.symbols = symbols
         self.data_source = data_source
         self.start_date = start_date
+        self.end_date = end_date
         self.min_data_rows = min_data_rows
 
         self.account = Account(
@@ -77,7 +79,7 @@ class PaperEngine:
 
         if not hasattr(self, "_fetcher"):
             self._fetcher = StockDataFetcher(source=self.data_source)
-        return self._fetcher.get_daily(symbol, start_date=self.start_date)
+        return self._fetcher.get_daily(symbol, start_date=self.start_date, end_date=self.end_date)
 
     def _bars(self, symbol: str) -> pd.DataFrame:
         """取行情(带缓存)"""

@@ -17,6 +17,7 @@ from stock_model.paper.broker import (
     is_suspended,
     price_limit_pct,
 )
+from stock_model.paper.engine import PaperEngine
 from stock_model.paper.models import Account, Order, OrderStatus, Side
 
 # ==================== 构造数据 ====================
@@ -439,3 +440,56 @@ class TestConcentrationLimit:
         assert o.status == OrderStatus.REJECTED
         assert len(acc.trades) == 0
         assert acc.cash == 500.0, "拒单后现金不应变动"
+
+
+# ==================== 回测窗口边界 ====================
+
+
+class TestDateWindow:
+    """start_date / end_date 必须真正约束模拟区间
+
+    对照实验的教训: 最初只传 start_date, 结果"跑 2019 年"实际跑到了
+    2026 年, 把上涨市对照跑成了跌市, 结论完全错误。
+    因此这两个参数必须有测试锁定。
+    """
+
+    def test_engine_accepts_end_date(self):
+        e = PaperEngine(symbols=["000002"], start_date="20190101", end_date="20191231")
+        assert e.start_date == "20190101"
+        assert e.end_date == "20191231"
+
+    def test_end_date_limits_loaded_data(self):
+        """_load 必须把 end_date 透传给数据层
+
+        最初实现漏传, 导致 end_date 只存不用 —— 「跑 2019 年」实际跑到 2026 年,
+        上涨市对照被跑成了跌市, 结论完全错误(实测踩过)。
+        """
+        from unittest.mock import MagicMock, patch
+
+        fake_fetcher = MagicMock()
+        fake_df = pd.DataFrame({"close": [1.0, 2.0]}, index=pd.date_range("2019", periods=2))
+        fake_fetcher.get_daily.return_value = fake_df
+
+        e = PaperEngine(symbols=["000002"], start_date="20190101", end_date="20191231")
+        with patch("stock_model.data.fetcher.StockDataFetcher", return_value=fake_fetcher):
+            result = e._load("000002")
+
+        fake_fetcher.get_daily.assert_called_once_with(
+            "000002", start_date="20190101", end_date="20191231"
+        )
+        assert result is fake_df
+
+    def test_end_date_none_loads_all(self):
+        """end_date=None 表示不限(向后兼容原行为)"""
+        from unittest.mock import MagicMock, patch
+
+        fake_fetcher = MagicMock()
+        fake_df = pd.DataFrame({"close": [1.0, 2.0]}, index=pd.date_range("2019", periods=2))
+        fake_fetcher.get_daily.return_value = fake_df
+
+        e = PaperEngine(symbols=["000002"], start_date="20190101")
+        with patch("stock_model.data.fetcher.StockDataFetcher", return_value=fake_fetcher):
+            e._load("000002")
+
+        _, kwargs = fake_fetcher.get_daily.call_args
+        assert kwargs.get("end_date") is None
