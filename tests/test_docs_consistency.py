@@ -151,3 +151,46 @@ class TestReadmeClaimsMatchCode:
         assert "内嵌HTML" not in readme and "内嵌 HTML" not in readme, (
             "README 仍描述 HTML 内嵌在 Python 中，但前端已拆分到 web/static/"
         )
+
+
+class TestStrategyEvaluationDoc:
+    """策略评估报告必须存在且保留关键警示
+
+    这份文档记录的是「容易踩坑的结论」—— 上涨市踏空、人工股票池。
+    如果被删除或弱化，后来者会再次用单窗口的漂亮数字误判策略。
+    """
+
+    @staticmethod
+    @pytest.fixture(scope="class")
+    def eval_doc():
+        doc = REPO_ROOT / "docs" / "strategy-evaluation-2026-10-07.md"
+        assert doc.is_file(), f"缺少 {doc.name} —— 策略评估报告是本项目最易踩坑的结论沉淀, 不可删除"
+        return doc.read_text(encoding="utf-8")
+
+    def test_doc_states_strategy_is_defensive(self, eval_doc):
+        """必须明确写出策略是抗跌型而非赚钱型"""
+        assert "抗跌" in eval_doc
+        assert "不是赚钱型" in eval_doc or "不是赚钱" in eval_doc
+
+    def test_doc_records_bull_market_underperformance(self, eval_doc):
+        """必须记录上涨市踏空这一关键结论"""
+        assert "上涨市" in eval_doc
+        assert "-39.08%" in eval_doc, "上涨市踏空的实测数字必须保留"
+
+    def test_doc_warns_about_manual_stock_pool(self, eval_doc):
+        """必须警示股票池是人工挑选且同质 —— 这是数据不可信的根本原因"""
+        assert "手挑" in eval_doc or "人工挑选" in eval_doc
+        assert "伪分散" in eval_doc, "应点明该股票池是'伪分散'"
+
+    def test_doc_declares_confidence_limits(self, eval_doc):
+        """必须声明数据可信度局限"""
+        assert "局限" in eval_doc
+        assert "不可信" in eval_doc or "不具统计意义" in eval_doc
+
+    def test_readme_links_to_evaluation(self):
+        """README 必须显著链接到评估报告"""
+        readme = README.read_text(encoding="utf-8")
+        assert "strategy-evaluation-2026-10-07" in readme, (
+            "README 应链接策略评估报告, 让使用者第一时间看到策略局限"
+        )
+        assert "-39.08%" in readme, "README 应直接给出上涨市踏空的关键数字"

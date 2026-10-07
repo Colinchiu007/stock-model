@@ -401,3 +401,181 @@ refreshPipeline();
 setInterval(() => {
   if ($('panel-pipeline').classList.contains('active')) refreshPipeline();
 }, 10000);
+// ============================================================
+// 模拟盘 (Paper Trading)
+// ============================================================
+
+const PAPER = { busy: false };
+
+async function paperRefresh() {
+  try {
+    const [acc, pos, trades, eq] = await Promise.all([
+      api('/api/paper/account'),
+      api('/api/paper/positions'),
+      api('/api/paper/trades?limit=100'),
+      api('/api/paper/equity'),
+    ]);
+
+    $('pp-asset').textContent = '¥' + num(acc.total_asset, 2);
+    const r = acc.total_return;
+    const retEl = $('pp-return');
+    retEl.textContent = `${r >= 0 ? '+' : ''}${(r * 100).toFixed(2)}%`;
+    retEl.style.color = r >= 0 ? 'var(--buy)' : 'var(--sell)';
+    $('pp-cash').textContent = '¥' + num(acc.cash, 2);
+    $('pp-mv').textContent = '¥' + num(acc.market_value, 2);
+    $('pp-ratio').textContent = '仓位 ' + (acc.position_ratio * 100).toFixed(0) + '%';
+    $('pp-trades').textContent = trades.total;
+
+    renderPositions(pos.positions);
+    renderPaperTrades(trades.trades);
+    renderEquity(eq.equity);
+
+    try {
+      const m = await api('/api/paper/metrics');
+      renderPaperMetrics(m);
+    } catch (e) { /* 绩效依赖数据量, 失败不阻塞 */ }
+  } catch (e) {
+    $('pp-warnings').innerHTML =
+      `<div class="alert">加载模拟盘数据失败：${esc(e.message)}</div>`;
+  }
+}
+
+function renderPaperMetrics(m) {
+  const x = m.metrics;
+  const acc = m.account;
+
+  // ⚠️ 可靠性警告: 必须显著展示, 不许只挑好看的数字
+  let warn = '';
+  if (x.warnings && x.warnings.length) {
+    warn = `<div class="warn-box">
+      <div class="t">⚠️ 样本量不足，指标不可作为策略有效性依据</div>
+      <ul>${x.warnings.map((w) => `<li>${esc(w)}</li>`).join('')}</ul>
+    </div>`;
+  }
+  $('pp-warnings').innerHTML = warn;
+
+  const card = (k, v, cls = '') =>
+    `<div class="kv-row"><span class="k">${k}</span><span class="v ${cls}">${v}</span></div>`;
+  const pnlCls = (v) => (v >= 0 ? 'pnl-pos' : 'pnl-neg');
+
+  const bm = x.benchmark_return;
+  const alpha = x.alpha;
+
+  $('pp-metrics').innerHTML = `
+    <div class="kv">
+      <h4>收益</h4>
+      ${card('累计收益', `${(x.total_return * 100).toFixed(2)}%`, pnlCls(x.total_return))}
+      ${card('年化收益', `${(x.annual_return * 100).toFixed(2)}%`, pnlCls(x.annual_return))}
+      ${card('总资产', '¥' + num(acc.total_asset, 2))}
+      ${card('交易天数', x.trading_days + ' 天')}
+    </div>
+    <div class="kv">
+      <h4>风险</h4>
+      ${card('最大回撤', (x.max_drawdown * 100).toFixed(2) + '%', 'pnl-neg')}
+      ${card('回撤持续', x.max_drawdown_duration + ' 天')}
+      ${card('年化波动', (x.volatility * 100).toFixed(2) + '%')}
+      ${card('夏普比率', num(x.sharpe, 2), pnlCls(x.sharpe))}
+    </div>
+    <div class="kv">
+      <h4>交易质量</h4>
+      ${card('完整回合', x.round_trips + ' 次')}
+      ${card('胜率', (x.win_rate * 100).toFixed(1) + '%')}
+      ${card('盈亏比', num(x.profit_loss_ratio, 2))}
+      ${card('总费用', '¥' + num(x.total_fee, 2))}
+    </div>
+    <div class="kv">
+      <h4>对比买入持有</h4>
+      ${card('基准收益', `${(bm * 100).toFixed(2)}%`, pnlCls(bm))}
+      ${card('超额收益', `${(alpha * 100).toFixed(2)}%`, pnlCls(alpha))}
+      ${card('Beta', num(x.beta, 3))}
+      ${card('样本是否充足', x.reliable ? '是' : '否（见上方警告）')}
+    </div>`;
+}
+
+function renderPositions(positions) {
+  if (!positions || !positions.length) {
+    $('pp-pos-body').innerHTML = '<tr class="empty-row"><td colspan="8">暂无持仓</td></tr>';
+    return;
+  }
+  $('pp-pos-body').innerHTML = positions.map((p) => {
+    const pnl = (p.profit_loss_pct || 0);
+    const cls = pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+    const frozen = p.frozen_shares > 0
+      ? `<span class="frozen-tag">冻结${p.frozen_shares}(T+1)</span>` : '';
+    return `<tr>
+      <td><strong>${esc(p.symbol)}</strong></td>
+      <td class="num">${p.shares}</td>
+      <td class="num">${num(p.avg_cost, 3)}</td>
+      <td class="num">${num(p.last_price, 2)}</td>
+      <td class="num">${num(p.market_value, 0)}</td>
+      <td class="num ${cls}">${num(p.profit_loss, 0)}</td>
+      <td class="num ${cls}">${(pnl * 100).toFixed(2)}%</td>
+      <td class="num">${p.available_shares ?? p.shares}${frozen}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderPaperTrades(trades) {
+  if (!trades || !trades.length) {
+    $('pp-trade-body').innerHTML = '<tr class="empty-row"><td colspan="8">暂无成交</td></tr>';
+    return;
+  }
+  $('pp-trade-body').innerHTML = trades.map((t) => {
+    const fee = (t.commission || 0) + (t.stamp_tax || 0) + (t.transfer_fee || 0);
+    return `<tr>
+      <td class="muted">${esc(t.executed_at)}</td>
+      <td><strong>${esc(t.symbol)}</strong></td>
+      <td><span class="badge ${esc(t.side)}">${esc(t.side.toUpperCase())}</span></td>
+      <td class="num">${t.shares}</td>
+      <td class="num">${num(t.price, 3)}</td>
+      <td class="num">${num(t.amount, 0)}</td>
+      <td class="num">${num(fee, 2)}</td>
+      <td class="muted" style="font-size:11px">${esc(t.signal_source || '')} ${t.signal_confidence ? num(t.signal_confidence, 2) : ''}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderEquity(equity) {
+  if (!equity || equity.length < 2) {
+    $('pp-equity').innerHTML = '<div class="muted">数据不足，运行模拟后显示</div>';
+    return;
+  }
+  $('pp-equity').innerHTML = sparkline(equity.map((p) => ({ date: p.date, close: p.total_asset })));
+}
+
+$('pp-run').addEventListener('click', async (e) => {
+  if (PAPER.busy) return;
+  PAPER.busy = true;
+  e.target.disabled = true;
+  show($('pp-loading'), true);
+  try {
+    const r = await api('/api/paper/run', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days: parseInt($('pp-days').value, 10) }),
+    });
+    if (r.status === 'ok') {
+      $('pp-range').textContent = `${r.from} ~ ${r.to} · ${r.steps} 个交易日 · ${r.trades} 笔成交`;
+    } else {
+      $('pp-range').textContent = '执行异常: ' + (r.error || '未知');
+    }
+  } catch (err) {
+    $('pp-range').textContent = '失败: ' + err.message;
+  } finally {
+    PAPER.busy = false;
+    e.target.disabled = false;
+    show($('pp-loading'), false);
+    paperRefresh();
+  }
+});
+
+$('pp-refresh').addEventListener('click', paperRefresh);
+$('pp-reset').addEventListener('click', async () => {
+  if (!confirm('重置模拟账户？当前所有模拟持仓与成交记录将清空。')) return;
+  await api('/api/paper/reset', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+  });
+  $('pp-range').textContent = '账户已重置';
+  paperRefresh();
+});
+
+paperRefresh();
