@@ -619,6 +619,11 @@ def create_app(config: dict | None = None) -> Any:
 
         register_screener_routes(app)
 
+        # ---- 模拟盘路由 ----
+        from stock_model.web.paper_api import register_paper_routes
+
+        register_paper_routes(app)
+
         return app
 
     except ImportError as err:

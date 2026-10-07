@@ -21,12 +21,71 @@
 
 <nav class="tabs">
   <button class="tab active" data-tab="screener">选股榜</button>
+  <button class="tab" data-tab="paper">模拟盘</button>
   <button class="tab" data-tab="detail">个股分析</button>
   <button class="tab" data-tab="backtest">回测 · 交易记录</button>
   <button class="tab" data-tab="pipeline">Pipeline</button>
 </nav>
 
 <main>
+
+  <!-- ============ 模拟盘 ============ -->
+  <section class="panel" id="panel-paper">
+    <div class="paper-banner">
+      ⚠️ <strong>模拟盘</strong> · 虚拟资金 ¥10,000 · <strong>不产生任何真实交易</strong>，仅用于验证策略表现
+    </div>
+
+    <div class="toolbar">
+      <label>推进</label>
+      <select id="pp-days">
+        <option value="20">20 个交易日</option>
+        <option value="60" selected>60 个交易日</option>
+        <option value="120">120 个交易日</option>
+        <option value="250">250 个交易日</option>
+        <option value="700">700 个交易日(全部)</option>
+      </select>
+      <button class="btn primary" id="pp-run">开始模拟</button>
+      <button class="btn" id="pp-refresh">刷新</button>
+      <button class="btn danger" id="pp-reset">重置账户</button>
+      <span id="pp-range" class="muted"></span>
+    </div>
+
+    <div id="pp-loading" class="loading hidden">
+      <div class="spinner"></div>
+      <span>模拟中… 逐日推进需拉取并处理真实行情，600+ 交易日约需数分钟</span>
+    </div>
+
+    <div class="cards">
+      <div class="card"><div class="card-label">总资产</div><div class="card-value" id="pp-asset">—</div>
+        <div class="card-sub" id="pp-return">—</div></div>
+      <div class="card"><div class="card-label">可用现金</div><div class="card-value" id="pp-cash">—</div></div>
+      <div class="card"><div class="card-label">持仓市值</div><div class="card-value" id="pp-mv">—</div>
+        <div class="card-sub" id="pp-ratio">—</div></div>
+      <div class="card"><div class="card-label">成交笔数</div><div class="card-value" id="pp-trades">—</div></div>
+    </div>
+
+    <div id="pp-warnings"></div>
+
+    <h3 class="section-title">绩效指标</h3>
+    <div class="grid2" id="pp-metrics"></div>
+
+    <h3 class="section-title">资金曲线</h3>
+    <div id="pp-equity"></div>
+
+    <h3 class="section-title">当前持仓</h3>
+    <table class="table" id="pp-pos-table">
+      <thead><tr><th>代码</th><th class="num">股数</th><th class="num">成本</th><th class="num">现价</th>
+        <th class="num">市值</th><th class="num">浮动盈亏</th><th class="num">盈亏比例</th><th class="num">可卖</th></tr></thead>
+      <tbody id="pp-pos-body"><tr class="empty-row"><td colspan="8">暂无持仓</td></tr></tbody>
+    </table>
+
+    <h3 class="section-title">成交记录（模拟）</h3>
+    <table class="table" id="pp-trade-table">
+      <thead><tr><th>成交日</th><th>代码</th><th>方向</th><th class="num">股数</th>
+        <th class="num">成交价</th><th class="num">金额</th><th class="num">费用</th><th>信号</th></tr></thead>
+      <tbody id="pp-trade-body"><tr class="empty-row"><td colspan="8">暂无成交</td></tr></tbody>
+    </table>
+  </section>
 
   <!-- ============ 选股榜 ============ -->
   <section class="panel active" id="panel-screener">

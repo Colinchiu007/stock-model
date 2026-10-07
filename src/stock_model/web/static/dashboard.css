@@ -194,3 +194,28 @@ main { padding: 20px 24px 48px; max-width: 1500px; }
 .trend-up { color: var(--buy); }
 .trend-down { color: var(--sell); }
 .muted { color: var(--text-dim); }
+
+/* ---------- 模拟盘 ---------- */
+.paper-banner {
+  padding: 10px 14px; margin-bottom: 14px; border-radius: 8px;
+  background: rgba(255,167,38,.12); border: 1px solid rgba(255,167,38,.4);
+  color: var(--warn); font-size: 13px;
+}
+.paper-banner strong { color: #ffb74d; }
+.card-sub { font-size: 11px; color: var(--text-dim); margin-top: 3px; }
+
+.warn-box {
+  padding: 10px 14px; margin: 12px 0; border-radius: 8px;
+  background: rgba(255,167,38,.1); border: 1px solid rgba(255,167,38,.35);
+  color: var(--warn); font-size: 12.5px; line-height: 1.7;
+}
+.warn-box .t { font-weight: 600; margin-bottom: 3px; }
+.warn-box ul { margin: 4px 0 0 16px; }
+
+.pnl-pos { color: var(--buy); }
+.pnl-neg { color: var(--sell); }
+
+.frozen-tag {
+  font-size: 10px; padding: 1px 5px; border-radius: 3px;
+  background: rgba(120,144,156,.2); color: var(--hold); margin-left: 4px;
+}
