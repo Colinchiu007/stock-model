@@ -564,3 +564,124 @@ class TestUnavailableSymbolHandling:
             pytest.raises(RuntimeError, match="全部无数据"),
         ):
             PaperEngine(symbols=["000002", "600036"])
+
+
+class TestTenacityRetryErrorIsCaught:
+    """tenacity.RetryError 必须被捕获 —— 它直接继承 Exception 而非 RuntimeError
+
+    真实故障: fetcher.get_daily 重试耗尽后抛 tenacity.RetryError,
+    而原实现只捕 (RuntimeError, ValueError, KeyError) 完全漏掉它,
+    导致「取数失败」以未处理异常穿透, 整轮回测中断。
+
+    此前的测试 mock 抛的是 RuntimeError, 根本没覆盖这个场景 ——
+    变异验证时才发现那条锁是假保险。
+    """
+
+    def test_retry_error_is_in_data_errors(self):
+        from tenacity import RetryError
+
+        from stock_model.paper.engine import _DATA_ERRORS
+
+        assert RetryError in _DATA_ERRORS, (
+            "tenacity.RetryError 必须在 _DATA_ERRORS 中, 否则取数失败会穿透为未处理异常"
+        )
+
+    def test_constructor_handles_retry_error(self):
+        """构造时遇到 RetryError 应剔除该标的而非崩溃"""
+        from unittest.mock import MagicMock, patch
+
+        from tenacity import RetryError
+
+        from stock_model.paper.engine import PaperEngine
+
+        def fake_get_daily(sym, **kwargs):
+            if sym == "603565":
+                raise RetryError("重试耗尽")
+            df = MagicMock()
+            df.empty = False
+            df.__len__ = lambda self=0: 100
+            return df
+
+        fake_fetcher = MagicMock()
+        fake_fetcher.get_daily.side_effect = fake_get_daily
+
+        with patch("stock_model.data.fetcher.StockDataFetcher", return_value=fake_fetcher):
+            e = PaperEngine(symbols=["000002", "603565"], min_data_rows=60)
+
+        assert "603565" not in e.symbols, "RetryError 应被捕获并剔除该标的"
+        assert "603565" in e.dropped_symbols
+
+    def test_all_retry_error_raises(self):
+        """全部标的 RetryError 时必须抛明确错误"""
+        from unittest.mock import MagicMock, patch
+
+        from tenacity import RetryError
+
+        from stock_model.paper.engine import PaperEngine
+
+        def boom(*a, **k):
+            raise RetryError("重试耗尽")
+
+        fake_fetcher = MagicMock()
+        fake_fetcher.get_daily.side_effect = boom
+
+        with (
+            patch("stock_model.data.fetcher.StockDataFetcher", return_value=fake_fetcher),
+            pytest.raises(RuntimeError, match="全部无数据"),
+        ):
+            PaperEngine(symbols=["000002", "600036"])
+
+
+class TestBenchmarkIndependentOfPool:
+    """基准取数必须独立于回测池
+
+    真实故障: report() 曾用 ``_cursor.get(benchmark, 0)`` 判断基准推进到哪天,
+    而基准通常**不在 symbols 里**(动态池尤其如此) → cursor 恒为 0 →
+    benchmark_prices 为空 → benchmark_return 与 alpha 都是 0。
+
+    实测后果: 实验输出「动态池把上涨市超额从 -39.08% 改善到 +0.00%,
+    提升 39.08 个百分点」—— **完全是伪信号**, 因为分母不存在。
+    若不发现, 会据此得出「换股票池就修好了踏空」的错误结论。
+
+    这比崩溃危险: 崩溃会让人去查, 错误结论会被直接采信。
+    """
+
+    def test_benchmark_not_in_pool_still_computed(self):
+        """基准不在 symbols 中时, 仍应算出非零基准收益"""
+        import pandas as pd
+
+        from stock_model.paper.engine import PaperEngine
+
+        e = PaperEngine.__new__(PaperEngine)  # 绕过取数
+        e.symbols = ["300001"]
+        e.dropped_symbols = []
+        e.data_source = "baostock"
+        e.start_date = "20190101"
+        e.end_date = "20191231"
+        e._cursor = {"300001": 5}
+        e._data_cache = {}
+        e._strategies = []
+        e.account = Account(initial_capital=10000.0, cash=10000.0)
+
+        # 基准 000002 不在 symbols 中
+        assert "000002" not in e.symbols
+
+        # 造一份基准行情: 10 -> 20 (100% 涨幅)
+        bdf = pd.DataFrame(
+            {"close": [10.0 + i for i in range(20)]},
+            index=pd.date_range("2019-01-01", periods=20, freq="B"),
+        )
+
+        from unittest.mock import MagicMock, patch
+
+        fake_fetcher = MagicMock()
+        fake_fetcher.get_daily.return_value = bdf
+
+        with patch("stock_model.data.fetcher.StockDataFetcher", return_value=fake_fetcher):
+            rep = e.report(benchmark_symbol="000002")
+
+        assert rep["benchmark_available"] is True, (
+            "基准不在回测池中也必须能算 —— 这正是伪信号的根源"
+        )
+        m = rep["metrics"]
+        assert m["benchmark_return"] > 0, f"基准收益应为正, 实际 {m['benchmark_return']}"
