@@ -146,6 +146,14 @@ class AutoDataCollector:
 
         Args:
             interval_minutes: 采集间隔(分钟)
+
+        Raises:
+            RuntimeError: apscheduler 未安装时。
+
+            此前此处在缺依赖时只 log 一条 WARNING 便静默返回,
+            导致上游(pipeline / web API)误判为"已启动",
+            用户看到界面显示运行中但实际无任何任务执行。
+            启动失败必须显式抛出,由调用方决定如何告知用户。
         """
         if self._running:
             logger.warning("定时采集已在运行")
@@ -153,21 +161,23 @@ class AutoDataCollector:
 
         try:
             from apscheduler.schedulers.background import BackgroundScheduler
+        except ImportError as err:
+            raise RuntimeError(
+                "定时采集不可用: 未安装 apscheduler。请执行 "
+                "`pip install apscheduler` 或 `pip install stock-model[schedule]`；"
+                "也可调用 collect_now() 手动触发采集。"
+            ) from err
 
-            self._scheduler = BackgroundScheduler()
-            self._scheduler.add_job(
-                self.collect_now,
-                "interval",
-                minutes=interval_minutes,
-                id="stock_data_collect",
-            )
-            self._scheduler.start()
-            self._running = True
-            logger.info(f"定时采集已启动，间隔={interval_minutes}分钟")
-
-        except ImportError:
-            logger.warning("apscheduler 未安装，定时采集不可用。请安装: pip install apscheduler")
-            logger.info("可使用 collect_now() 手动触发采集")
+        self._scheduler = BackgroundScheduler()
+        self._scheduler.add_job(
+            self.collect_now,
+            "interval",
+            minutes=interval_minutes,
+            id="stock_data_collect",
+        )
+        self._scheduler.start()
+        self._running = True
+        logger.info(f"定时采集已启动，间隔={interval_minutes}分钟")
 
     def stop(self) -> None:
         """停止定时采集"""
