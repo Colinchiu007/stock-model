@@ -236,13 +236,19 @@ class StockDataFetcher:
         """带缓存的行情数据获取
 
         流程: 查缓存 → 缓存命中则返回 → 缓存未命中则获取 → 写入缓存 → 返回
+
+        缓存是优化而非主路径: 缓存层出现任何异常(缺可选引擎/磁盘故障等)
+        都不得影响数据获取本身。
         """
         if self._cache_enabled:
             key = self._cache_key(method, symbol, **kwargs)
-            cached = self._storage.cache_get_with_ttl(key, self._cache_ttl)
-            if cached is not None:
-                logger.info(f"缓存命中: {key} ({len(cached)} 条)")
-                return cached
+            try:
+                cached = self._storage.cache_get_with_ttl(key, self._cache_ttl)
+                if cached is not None:
+                    logger.info(f"缓存命中: {key} ({len(cached)} 条)")
+                    return cached
+            except (OSError, ValueError, ImportError, AttributeError) as e:
+                logger.warning(f"读取缓存失败({key}): {e}, 继续走数据源")
 
         # 缓存未命中或缓存禁用，从数据源获取
         df = self._execute_with_fallback(method, symbol, **kwargs)
@@ -253,8 +259,9 @@ class StockDataFetcher:
             try:
                 self._storage.cache_set(key, df)
                 logger.debug(f"已写入缓存: {key}")
-            except (OSError, ValueError) as e:
-                logger.warning(f"写入缓存失败: {e}")
+            except (OSError, ValueError, ImportError, AttributeError) as e:
+                # 缓存写不进去不影响返回数据
+                logger.warning(f"写入缓存失败({key}): {e}")
 
         return df
 

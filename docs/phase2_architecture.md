@@ -87,10 +87,9 @@
 
 ### 2.2 实时交易信号推送
 
-**新增目录：** `notify/`
+**新增目录:** `notify/`
 - `notify/notifier.py` — SignalNotifier信号通知器
 - `notify/channels.py` — 推送通道(Console/File/Webhook)
-- `notify/templates.py` — 消息模板
 
 **SignalNotifier：**
 - `add_channel(channel)` — 添加推送通道

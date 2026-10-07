@@ -685,12 +685,23 @@ class StrategyEngine:
         best_action = max(scores, key=scores.get)
         best_confidence = scores[best_action]
 
+        # 价格字段: 取产生最高信心那一档的建议值
+        # 理由: 若价格与动作来自不同策略, 下游风控拿到的止损位与实际投票动作
+        # 来源不一致, 会产生"用 A 的止损风控 B 的信号"的错配
+        price_source_name, price_source = max(results.items(), key=lambda kv: kv[1].confidence)
+
         return StrategyResult(
             symbol=symbol,
             action=best_action,
             confidence=best_confidence,
             reason=f"聚合信号(buy={buy_score:.2f}, sell={sell_score:.2f}, hold={hold_score:.2f})",
-            metadata={"individual_results": {n: str(r) for n, r in results.items()}},
+            target_price=price_source.target_price,
+            stop_loss=price_source.stop_loss,
+            position_pct=price_source.position_pct,
+            metadata={
+                "individual_results": {n: str(r) for n, r in results.items()},
+                "price_source_strategy": price_source_name,
+            },
         )
 
     def get_performance(self) -> dict[str, StrategyPerformance]:

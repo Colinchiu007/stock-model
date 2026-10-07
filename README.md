@@ -30,9 +30,9 @@ stock-model/
 │   ├── strategy/              # 策略层
 │   │   ├── base.py            # 策略基类
 │   │   ├── manual.py          # 手动策略
-│   │   ├── momentum.py        # 动量策略
 │   │   ├── quant_strategy.py  # 🆕 量化策略基类 (参数化+网格优化)
 │   │   ├── engine.py          # 🆕 策略引擎+回测引擎
+│   │   ├── trading_env.py     # 🆕 Gymnasium交易环境
 │   │   └── rl_agent.py        # 🆕 RL交易Agent (PPO/DQN)
 │   ├── risk/                  # 🆕 风险管理
 │   │   ├── models.py          # 风险数据模型
@@ -117,12 +117,12 @@ print(financial.head())
 ```python
 # === 量化策略 + 回测 ===
 from stock_model.strategy.engine import BacktestEngine, StrategyEngine
-from stock_model.strategy.momentum import MomentumStrategy
+from stock_model.strategy.manual import ManualStrategy
 
 engine = BacktestEngine(initial_cash=100000)
-result = engine.run(MomentumStrategy(), df, "000001")
+result = engine.run(ManualStrategy(), df, "000001")
 print(f"总收益率: {result.metrics['total_return']:.2%}")
-print(f"夏普比率: {result.metrics['sharpe_ratio']:.2f}")
+print(f"夏普比率: {result.metrics['sharpe']:.2f}")
 print(f"最大回撤: {result.metrics['max_drawdown']:.2%}")
 
 # === 风险管理 ===
@@ -192,7 +192,6 @@ python examples/demo.py
 
 - **BaseStrategy**: 策略基类 (统一接口)
 - **ManualStrategy**: 手动综合策略
-- **MomentumStrategy**: 动量策略
 - **🆕 QuantStrategy**: 量化策略基类
   - 参数化策略 (StrategyParams)
   - 网格搜索优化 (笛卡尔积参数组合)
