@@ -195,7 +195,13 @@ class TestRiskCheck:
 
     @patch.object(TradingPipeline, "_fetch_data")
     def test_risk_check_exception_returns_empty(self, mock_fetch):
-        """风控检查异常时返回空列表"""
+        """风控检查异常时返回空列表, 且流水线继续执行
+
+        注意: 断言必须精确。此前这里写成
+            assert result.status in [EXECUTED, SKIPPED, BLOCKED]
+        三种状态都算通过, 等于什么都没断言 —— 而文件头注释却宣称
+        覆盖「风控拦截」。
+        """
         mock_fetch.return_value = _make_df()
         config = _make_config()
         pipeline = TradingPipeline(config=config)
@@ -205,12 +211,9 @@ class TestRiskCheck:
         pipeline._risk_manager.check_position_risk.side_effect = ValueError("risk error")
 
         result = pipeline.run_once("000001")
-        # 不应崩溃
-        assert result.status in [
-            PipelineStatus.EXECUTED,
-            PipelineStatus.SKIPPED,
-            PipelineStatus.BLOCKED,
-        ]
+        # 风控异常 → 返回空告警 → 流程不中断，应正常执行完成
+        assert result.status == PipelineStatus.EXECUTED
+        assert result.risk_alerts == []
 
 
 class TestPositionCalculation:

@@ -99,9 +99,10 @@ class RLTradingAgent(BaseStrategy):
         agent = RLTradingAgent(model_type="ppo")
         metrics = agent.train(env, timesteps=10000)
 
-        # 保存/加载
+        # 保存/加载（load 返回是否成功，务必检查）
         agent.save("models/rl_agent")
-        agent.load("models/rl_agent")
+        if not agent.load("models/rl_agent"):
+            logger.warning("模型加载失败，将使用规则策略降级")
 
         # 预测
         result = agent.analyze("000001", df)
@@ -482,11 +483,18 @@ class RLTradingAgent(BaseStrategy):
         self._model.save(path)
         logger.info(f"模型已保存: {path}")
 
-    def load(self, path: str) -> None:
+    def load(self, path: str) -> bool:
         """加载模型
 
         Args:
             path: 模型路径(不含扩展名)
+
+        Returns:
+            bool: 是否加载成功
+
+            注意: 此前失败时只 log 一条 warning 并返回 None, 调用方无法区分
+            成功与失败 —— 只能去读日志。改为返回明确的布尔值, 并说明失败原因。
+            ``is_trained`` 属性此前全项目无人使用, 形同虚设。
         """
         try:
             from stable_baselines3 import DQN, PPO
@@ -495,10 +503,13 @@ class RLTradingAgent(BaseStrategy):
             self._model = model_cls.load(path)
             self._trained = True
             logger.info(f"模型已加载: {path}")
+            return True
         except ImportError:
             logger.warning("stable-baselines3 未安装，无法加载模型")
+            return False
         except FileNotFoundError:
             logger.warning(f"模型文件不存在: {path}")
+            return False
 
     def train_with_data(
         self,

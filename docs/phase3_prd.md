@@ -189,15 +189,24 @@
 
 ## 技术债务记录
 
-| 编号 | 描述 | 优先级 | 计划版本 |
-|------|------|--------|----------|
-| TD-01 | Web Dashboard多worker状态共享 | P3 | v0.5.0 |
-| TD-02 | TradingEnv多股票环境 | P3 | v0.5.0 |
-| TD-03 | RL Agent超参数调优(Optuna) | P3 | v0.5.0 |
-| TD-04 | TradingEnv奖励函数增强 | P3 | v0.5.0 |
-| TD-05 | Web Dashboard用户认证 | P4 | v0.6.0 |
-| TD-06 | 实时行情WebSocket | P4 | v0.6.0 |
-| TD-07 | Docker化部署 | P4 | v0.6.0 |
+| 编号 | 描述 | 优先级 | 状态 | 计划版本 |
+|------|------|--------|------|----------|
+| TD-01 | Web Dashboard多worker状态共享 | P3 | ⚠️ 已收口为「启动即报错」守卫<br>(真正共享需抽独立服务, 未做) | v0.5.0 |
+| TD-02 | TradingEnv多股票环境 | P3 | ✅ 已实现 `MultiStockTradingEnv` | v0.5.0 |
+| TD-03 | RL Agent超参数调优(Optuna) | P3 | 待办 | v0.5.0 |
+| TD-04 | TradingEnv奖励函数增强 | P3 | ✅ 已实现 `BUILTIN_REWARDS` + 自定义 `RewardFn` | v0.5.0 |
+| TD-05 | Web Dashboard用户认证 | P4 | 待办 | v0.6.0 |
+| TD-06 | 实时行情WebSocket | P4 | 待办 | v0.6.0 |
+| TD-07 | Docker化部署 | P4 | 待办 | v0.6.0 |
+
+> **TD-01 说明**：多 worker 共享状态**未实现**，因为 pipeline 持有真实的
+> APScheduler 后台线程，无法跨进程共享。用 Redis 只同步 status 反而更危险
+> （界面显示"已停止"但调度器仍在跑）。当前做法是启动期检测到 `workers > 1`
+> 直接抛 `MultiWorkerNotSupportedError`，把「未定义行为」变成「启动即报错」。
+> 真正支持需将 pipeline 抽为独立单例服务，属架构级改造。
+
+> **审查期间新增的缺陷**：2026-10-06/07 的质量审查共修复 **15 个静默缺陷**
+> （含 2 个 P0），详见 `docs/bug-reflection-2026-10-06.md`。
 
 ---
 
