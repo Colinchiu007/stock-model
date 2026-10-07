@@ -128,6 +128,7 @@ def create_app(config: dict | None = None) -> Any:
         async def start_pipeline(req: PipelineStartRequest):
             """启动Pipeline定时执行"""
             try:
+                from stock_model.data.collector import MissingDependencyError
                 from stock_model.pipeline.config import PipelineConfig
                 from stock_model.pipeline.trading_pipeline import TradingPipeline
                 from stock_model.strategy.manual import ManualStrategy
@@ -175,6 +176,17 @@ def create_app(config: dict | None = None) -> Any:
                 pipeline.on_result(on_result)
                 pipeline.start_scheduled(interval_minutes=req.interval_minutes)
 
+                # 确认调度器确实在跑, 再更新状态。
+                # start_scheduled 成功返回即意味着 collector 已进入运行态;
+                # 这里再校验一次, 防止未来新增的静默降级路径把
+                # "未启动" 伪装成 "已启动"。
+                if not pipeline.is_running:
+                    pipeline.stop()
+                    raise MissingDependencyError(
+                        "Pipeline启动失败: 调度器未进入运行状态"
+                        "(可能未安装 apscheduler, 请执行 pip install apscheduler)"
+                    )
+
                 # 保存实例引用
                 nonlocal _pipeline_instance
                 _pipeline_instance = pipeline
@@ -194,8 +206,11 @@ def create_app(config: dict | None = None) -> Any:
                     "watchlist": _pipeline_state["watchlist"],
                 }
 
-            except ImportError as e:
-                raise HTTPException(status_code=500, detail=f"依赖缺失: {e}") from e
+            except HTTPException:
+                raise
+            except MissingDependencyError as e:
+                logger.warning(f"Pipeline启动失败(缺可选依赖): {e}")
+                raise HTTPException(status_code=503, detail=str(e)) from e
             except Exception as e:
                 logger.error(f"Pipeline启动失败: {e}")
                 raise HTTPException(status_code=500, detail=str(e)) from e
