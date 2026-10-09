@@ -75,6 +75,10 @@ class PaperEngine:
         max_position_pct: float = 0.20,
         min_data_rows: int = 60,
         skip_unavailable: bool = True,
+        *,
+        account_id: str = "paper-default",
+        account: Account | None = None,
+        validate_symbols: bool = True,
     ) -> None:
         """构造模拟盘引擎
 
@@ -83,14 +87,31 @@ class PaperEngine:
                 还是直接抛错(False)。**无论该开关如何, 至少要有一只
                 股票可用** —— 全部取不到时一律抛错, 因为"静默跑一个
                 空池"比崩溃更难发现(这是本项目反复出现的缺陷模式)。
+            account_id: 账户 id。此前硬编码为 ``paper-default``, 而 API 层
+                按 ``account_id`` 分账户落盘, 导致所有账户互相覆盖。
+            account: 从磁盘恢复出来的账户。传入时**直接复用该对象**而不是
+                新建空账户 —— 关键点是 ``Broker`` 必须绑定到它: 若先建空账户
+                再把 ``engine.account`` 换成恢复出来的对象, ``broker.account``
+                仍指向被丢弃的空账户, 之后的成交会记到"影子账户"上,
+                而界面上看到的账户永远不变(静默丢数据)。
+            validate_symbols: 构造时是否逐只校验可取数。默认 True(防"静默跑空池")。
+                从磁盘恢复时传 False: 池子此前已验证过, 重复校验既白跑一遍全量
+                取数, 又会让一次网络抖动变成"账户打不开"。
         """
         self.data_source = data_source
         self.start_date = start_date
         self.end_date = end_date
         self.min_data_rows = min_data_rows
+        self.account_id = account_id
 
         self.dropped_symbols: list[str] = []
-        if len(symbols) > 1:
+        if not validate_symbols:
+            # 恢复场景: 池子来自磁盘, 不重复取数。但空池仍然直接拒绝 ——
+            # "静默跑一个空池"正是本项目反复出现的那类缺陷。
+            if not symbols:
+                raise ValueError("股票池为空: 拒绝构造一个不会做任何事的引擎")
+            logger.info(f"跳过标的可用性校验(恢复场景), 直接使用 {len(symbols)} 只标的")
+        elif len(symbols) > 1:
             if skip_unavailable:
                 symbols = self._filter_tradable(symbols)
             else:
@@ -99,11 +120,14 @@ class PaperEngine:
             self._assert_all_tradable(symbols)
         self.symbols = symbols
 
-        self.account = Account(
-            account_id="paper-default",
-            initial_capital=initial_capital,
-            cash=initial_capital,
-        )
+        if account is None:
+            self.account = Account(
+                account_id=account_id,
+                initial_capital=initial_capital,
+                cash=initial_capital,
+            )
+        else:
+            self.account = account
         self.broker = Broker(self.account, max_position_pct=max_position_pct)
         self._strategies: list[BaseStrategy] = []
         self._cursor: dict[str, int] = {}  # 各标的已处理到的数据行索引
@@ -180,6 +204,59 @@ class PaperEngine:
         if symbol not in self._data_cache:
             self._data_cache[symbol] = self._load(symbol)
         return self._data_cache[symbol]
+
+    # ==================== 状态持久化 ====================
+
+    def state_dict(self) -> dict[str, Any]:
+        """引擎的可持久化状态(账户**之外**的那部分)
+
+        为什么必须存这个
+        ----------------
+        ``Account`` 存了钱、持仓、成交和资金曲线, 但**「推进到哪一天」不在账户里**
+        —— 它在引擎的 ``_cursor`` 上。只恢复账户、不恢复游标, 重启后
+        ``step()`` 会从数据区间开头重新推进, 于是:
+
+          - 在已经交易过的历史日期上**再交易一遍**(成交记录出现重复日期)
+          - 资金曲线被追加历史点, 回撤/年化全部失真
+
+        这比"丢状态"更难发现 —— 界面上的成交记录看着是变多了, 不是空了。
+
+        Returns:
+            ``symbols`` / 取数区间 / 游标 / 已剔除标的 等恢复所需信息
+        """
+        return {
+            "version": 1,
+            "symbols": list(self.symbols),
+            "data_source": self.data_source,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "initial_capital": self.account.initial_capital,
+            "dropped_symbols": list(self.dropped_symbols),
+            "cursor": dict(self._cursor),
+        }
+
+    def load_state(self, state: dict[str, Any] | None) -> None:
+        """恢复进度状态
+
+        ⚠️ **只恢复"推进到哪里"**。``symbols`` / ``data_source`` / ``start_date``
+        / ``end_date`` 决定了取数窗口, 必须在**构造时**就传对 —— 本方法不碰它们。
+        理由是 ``_cursor`` 存的是数据行下标: 若取数区间与落盘时不一致,
+        同一批下标会指向别的日期, 恢复出来的"进度"完全是错的。
+
+        Args:
+            state: ``state_dict()`` 的产物; ``None`` / 空字典 = 不做任何恢复。
+        """
+        if not state:
+            return
+
+        cursor = state.get("cursor") or {}
+        if cursor:
+            self._cursor = {str(k): int(v) for k, v in cursor.items()}
+            logger.info(f"恢复推进进度: {len(self._cursor)} 只标的 {self._cursor}")
+
+        dropped = state.get("dropped_symbols") or []
+        if dropped:
+            self.dropped_symbols = [str(s) for s in dropped]
 
     # ==================== 推进 ====================
 
