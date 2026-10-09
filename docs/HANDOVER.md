@@ -3,12 +3,12 @@
 > **交接对象**：下一个接手的 Agent
 > **交接日期**：2026-10-09
 > **仓库**：`Colinchiu007/stock-model`（A股量化分析工具）
-> **当前 main**：`9b5896512`（16 个 PR 已合并）
+> **当前 main**：`7c0b90d33`（17 个 PR 已合并，0 个未合并）
 > **文档性质**：接手前必读。读完能明白「做了什么、为什么这么做、接下来该做什么」。
 
 > **测试基线说明**：
-> - 当前 main：`660 tests collected`（650 passed + 10 skipped）
-> - 合并 PR #18 后：`674 collected`（664 passed + 10 skipped）
+> - 当前 main：`674 tests collected`（664 passed + 10 skipped）
+> - 状态：**已全部合并至 main**，无未合并 PR
 
 ---
 
@@ -154,14 +154,13 @@ _engines: dict[str, Any] = {}   # 进程重启 = 持仓/成交/资金曲线全�
 直接 AttributeError。股票池等信息存在 `_metadata` 字段里，
 需从 `store_path(account_id)` 读 JSON 的 `_metadata` 获取。
 
-### 4.2 🟡 P1：PR #18 待合并
+### 4.2 ✅ 已完成：PR #18 已合并
 
 ```
-PR #18  feat/paper-persistence  → main
-  664 passed, 10 skipped, lint 已修（9b5526f）
+PR #18  feat/paper-persistence  → main   已合并（7c0b90d）
 ```
 
-合并前 CI 需再跑一次确认 6/6。
+`paper/store.py` 现已在 main 上。**剩下的只有接线与调度。**
 
 ### 4.3 🟢 P2：PRD 记录的技术债
 
@@ -272,7 +271,7 @@ python experiments/run_trend_filter_test.py      # 趋势过滤器效果
 2. 合并 PR #18（持久化模块）
 
 3. 接线 paper_api + 加定时调度   ← 用户当前诉求
-   ├─ ⚠️ 注意 Account 无 symbols 属性，配置在 _metadata
+   ├─ ⚠️ 注意 Account 无 symbols 属性，配置在 _metadata（详见 docs/HANDOVER.md 4.1）
    ├─ 必须做「重启后状态还在」的端到端验证
    └─ 完成后去掉 tests/test_paper_store.py 里那条 skip
 
