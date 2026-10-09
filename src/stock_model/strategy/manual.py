@@ -15,6 +15,7 @@ from stock_model.analysis.fundamental import FundamentalAnalysis
 from stock_model.analysis.signals import SignalGenerator, SignalStrength, SignalType
 from stock_model.analysis.technical import TechnicalAnalysis
 from stock_model.strategy.base import ActionType, BaseStrategy, StrategyResult
+from stock_model.strategy.trend_filter import TrendFilter
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -34,10 +35,17 @@ class ManualStrategy(BaseStrategy):
     name = "manual"
     description = "手动综合策略 - 技术分析+基本面分析"
 
-    def __init__(self):
+    def __init__(self, use_trend_filter: bool = True):
+        """手动策略
+
+        Args:
+            use_trend_filter: 是否启用趋势过滤（拦截逆势买卖）。
+                置 False 可回到过滤前的原始行为，便于做 A/B 对照。
+        """
         self.ta = TechnicalAnalysis()
         self.signals = SignalGenerator()
         self.fundamental = FundamentalAnalysis()
+        self.trend_filter = TrendFilter() if use_trend_filter else None
 
     def analyze(self, symbol: str, df: pd.DataFrame) -> StrategyResult:
         """
@@ -91,7 +99,20 @@ class ManualStrategy(BaseStrategy):
             buy_n, sell_n, trend_n = len(buy_signals), len(sell_signals), trend
             reason = f"技术面中性 (买入信号={buy_n}, 卖出信号={sell_n}, 趋势={trend_n})"
 
-        # 6. 计算建议价格
+        # 6. 趋势过滤: 拦截逆势操作
+        #    分组对照实验实测 2019 上涨市中 67% 的 SELL 发生在价格上涨趋势内,
+        #    导致动态池跑输基准 41%(且是亏损, 非踏空)。此处只拦逆势方向,
+        #    横盘时完全放行, 不改变震荡市行为。
+        if action != ActionType.HOLD and self.trend_filter is not None:
+            blocked = self.trend_filter.should_block(action.value, df_with_indicators)
+            if blocked:
+                tf_state = self.trend_filter.judge(df_with_indicators)
+                original = action.value
+                action = ActionType.HOLD
+                confidence = 0.3
+                reason = f"趋势过滤拦截{original.upper()} (趋势={tf_state.value}, 原信号: {reason})"
+
+        # 7. 计算建议价格
         current_price = df["close"].iloc[-1]
         target_price = None
         stop_loss = None

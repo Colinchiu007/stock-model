@@ -173,9 +173,27 @@ class TestStrategyEvaluationDoc:
         assert "不是赚钱型" in eval_doc or "不是赚钱" in eval_doc
 
     def test_doc_records_bull_market_underperformance(self, eval_doc):
-        """必须记录上涨市踏空这一关键结论"""
+        """必须记录上涨市跑输基准这一关键结论
+
+        注: 数字随评估更新而变 —— 2026-07 首版是 -39.08%(踏空),
+        2026-10-09 换动态池后是 -41.32%(亏损)。两者都是真实结论,
+        关键是「必须存在一个上涨市跑输的实测数字」。
+        """
         assert "上涨市" in eval_doc
-        assert "-39.08%" in eval_doc, "上涨市踏空的实测数字必须保留"
+        assert "-39.08%" in eval_doc or "-41.32%" in eval_doc, "上涨市跑输基准的实测数字必须保留"
+
+    def test_doc_records_root_cause(self, eval_doc):
+        """必须记录根因: 逆势卖出 —— 否则后来者会重走弯路"""
+        assert "逆势" in eval_doc, "评估报告必须说明上涨市跑输的根因"
+        assert "67%" in eval_doc or "100%" in eval_doc, "应给出逆势卖出的量化占比"
+
+    def test_doc_mentions_trend_filter(self, eval_doc):
+        """必须记录趋势过滤器这一修复, 及其验证状态
+
+        未完成的验证也要写清楚, 不能让人误以为已验证有效。
+        """
+        assert "趋势过滤" in eval_doc
+        assert "trend_filter" in eval_doc, "应指向 trend_filter 模块"
 
     def test_doc_warns_about_manual_stock_pool(self, eval_doc):
         """必须警示股票池是人工挑选且同质 —— 这是数据不可信的根本原因"""
@@ -188,9 +206,18 @@ class TestStrategyEvaluationDoc:
         assert "不可信" in eval_doc or "不具统计意义" in eval_doc
 
     def test_readme_links_to_evaluation(self):
-        """README 必须显著链接到评估报告"""
+        """README 必须显著链接到评估报告, 并直接给出上涨市的关键数字
+
+        注: 数字随评估更新而变(2026-07 首版 -39.08% 踏空;
+        2026-10-09 换动态池后修正为 -41.32% 亏损)。
+        故此处锁定「任一版本的实测数字存在」+ 文档链接存在,
+        而非硬编码某个具体值 —— 硬编码会在每次修正结论后变成噪音。
+        """
         readme = README.read_text(encoding="utf-8")
         assert "strategy-evaluation-2026-10-07" in readme, (
             "README 应链接策略评估报告, 让使用者第一时间看到策略局限"
         )
-        assert "-39.08%" in readme, "README 应直接给出上涨市踏空的关键数字"
+        # 上涨市超额必须以百分比形式出现在 README
+        assert "-41.32%" in readme or "-39.08%" in readme, (
+            "README 应直接给出上涨市跑输基准的实测数字"
+        )
