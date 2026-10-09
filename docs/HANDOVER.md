@@ -1,21 +1,28 @@
 # 项目交接文档
 
 > **交接对象**：下一个接手的 Agent
-> **交接日期**：2026-10-09
+> **交接日期**：2026-10-09（2026-10-10 更新：定时运行已完成）
 > **仓库**：`Colinchiu007/stock-model`（A股量化分析工具）
-> **当前 main**：`7c0b90d33`（17 个 PR 已合并，0 个未合并）
 > **文档性质**：接手前必读。读完能明白「做了什么、为什么这么做、接下来该做什么」。
 
-> **测试基线说明**：
-> - 当前 main：`674 tests collected`（664 passed + 10 skipped）
-> - 状态：**已全部合并至 main**，无未合并 PR
+> **测试基线说明**（PR #19 合并后 CI 实测，6/6 全绿）：
+> - `Test Optional Dependencies`（装齐可选依赖）：**732 passed, 9 skipped**
+> - `Test (3.10 / 3.11 / 3.12)`（只装 `.[dev,quant]`）：**666 passed, 36 skipped, 0 失败**
+> - 本地装齐依赖：`740 passed, 1 skipped`
+> - 两个 job 的**收集总数本就不同**（缺 fastapi 时 `test_web_app.py` 整体算一个 skip 条目），
+>   别拿一个环境的数字去改另一个环境的文档
+> - 变化原因：`test_paper_store.py` 里那条 skip 已改为真断言，
+>   新增 59 个测试（持久化 14 / 调度 32 / 端点 13），`test_paper_store.py` 另加 8 个
+> - 状态：**无未合并 PR**
 
 ---
 
 ## 一、一句话现状
 
-项目从「测试全绿但多处静默失效」修到「功能可用 + 评估结论可信」，
-**模拟盘 / 动态选股 / 前端界面都已落地**，但**定时自动运行尚未接线**。
+**模拟盘已能持久化 + 定时自动运行**（2026-10-10 完成），
+动态选股 / 前端 5 个 Tab / 评估文档均已落地。
+
+**下一步不是写代码，是让它真实跑 2-4 周收集数据**（见第三节、第七节）。
 
 ---
 
@@ -53,9 +60,11 @@
 | **模拟盘** | `paper/models.py` `broker.py` `metrics.py` `engine.py` | 1 万元虚拟资金，**T+1 次日开盘价撮合** |
 | **动态股票池** | `paper/universe.py` | 全市场 7423 → 三层筛选 → Top N |
 | **选股/分析/回测 API** | `web/screener.py` | 3 个端点 |
-| **模拟盘 API** | `web/paper_api.py` | 9 个端点 |
+| **模拟盘 API** | `web/paper_api.py` | 13 个端点（含 4 个定时运行端点） |
 | **前端界面** | `web/static/` | 5 个 Tab，从内嵌字符串拆成独立文件 |
 | **纯 pandas 指标** | `analysis/indicators.py` | MACD/RSI/BOLL/ATR/KDJ/OBV 无依赖实现 |
+| **状态持久化**（2026-10-10） | `paper/store.py` + `web/paper_api.py` | 账户 + 推进游标原子落盘，重启恢复 |
+| **定时运行**（2026-10-10） | `paper/scheduler.py` | APScheduler；交易日判断、失败可见、配置落盘自恢复 |
 
 **A 股规则已实现**：T+1 冻结、100 股整手、佣金万3（5元下限）、
 印花税卖出 0.05%、过户费、涨跌停不撮合、单票 ≤20%。
@@ -66,8 +75,9 @@
 |------|------|
 | `docs/strategy-evaluation-2026-10-07.md` | 策略评估报告（含**负面实验记录**） |
 | `docs/bug-reflection-2026-10-06.md` | 15 个缺陷复盘 + 逃逸分析 |
-| `docs/phase4_prd_paper_trading.md` | 模拟盘 PRD |
+| `docs/phase4_prd_paper_trading.md` | 模拟盘 PRD（含持久化 / 定时运行 / 13 个端点） |
 | `experiments/*.py` | 4 个可复现实验脚本 |
+| `experiments/verify_paper_restart.ps1` | **可复现**的「重启不丢状态」端到端验证（真起服务 + 真强杀） |
 
 ---
 
@@ -93,8 +103,7 @@
 | 趋势过滤器（拦逆势买卖） | **净负 -1.28pp** | 涨市 -2.36pp、跌市 -4.11pp，核心目标未达成 |
 
 趋势过滤器代码仍在 `strategy/trend_filter.py`，但
-**`ManualStrategy(use_trend_filter=...)` 默认 `False`**，有测试锁住。
-有专门的 skip 测试提醒这项工作尚未接线完成。
+**`ManualStrategy(use_trend_filter=...)` 默认 `False`**，有测试锁住（`tests/test_trend_filter.py`）。
 
 ### 3.3 关键教训
 
@@ -123,56 +132,113 @@
 
 ---
 
-## 四、未完成的工作
+## 四、P0 定时运行：**已完成**（2026-10-10）
 
-### 4.1 🔴 P0：定时运行完全没做（用户当前诉求）
+### 4.1 交付内容
 
-**现状**：
-- ✅ `paper/store.py` 账户持久化模块已实现（**但 PR #18 未合并**）
-- ❌ `web/paper_api.py` **未接线**（`grep paper.store` 结果为 0）
-- ❌ 模拟盘**无任何定时调度**
+| # | 内容 | 落点 |
+|---|------|------|
+| ① | **持久化接线** | `web/paper_api.py`：`_get_engine()` 恢复、`step`/`run` 落盘、`reset` 清盘 |
+| ② | **定时调度** | `paper/scheduler.py`（APScheduler）+ `/api/paper/schedule` 开启/停止/查询/立即执行 |
+| ③ | **端到端验证** | `experiments/verify_paper_restart.ps1`（真实起服务 → 强杀 → 重启 → 比对） |
 
-**为什么必须先接线持久化**：
+### 4.2 验证证据（真实数据，可复现）
 
-`paper_api.py` 的引擎只存在进程内存的 `_engines` 字典：
-
-```python
-_engines: dict[str, Any] = {}   # 进程重启 = 持仓/成交/资金曲线全丢
-```
-
-定时跑的场景下，机器重启/发版/崩溃一次就可能丢账户状态甚至重复交易。
-
-**已有资产**：
-- `paper/store.py` — `save_account()` 原子写入、`load_account()` 容错恢复
-- `paper/engine.py:287` 的 `step()` 可被调度调用
-- `data/collector.py:174` 有现成的 APScheduler 用法可参考
-
-**接线时的坑（我踩过）**：
-
-⚠️ `Account` 对象**没有** `symbols` / `data_source` / `start_date` 属性，
-这些在 `PaperEngine` 上。我第一次写恢复逻辑时误用了 `restored.symbols`，
-直接 AttributeError。股票池等信息存在 `_metadata` 字段里，
-需从 `store_path(account_id)` 读 JSON 的 `_metadata` 获取。
-
-### 4.2 ✅ 已完成：PR #18 已合并
+`pwsh -NoProfile -File experiments/verify_paper_restart.ps1` 实测输出：
 
 ```
-PR #18  feat/paper-persistence  → main   已合并（7c0b90d）
+跑真实数据: steps=200 trades=8 persisted=True
+  区间 2024-01-03 ~ 2024-11-04   总资产=10401.64
+开启定时:   running=True next_run=10/12/2026 15:30:00
+强杀进程:   data/paper/default.json (34384 bytes) + schedule.json
+重启后:     总资产=10401.64 成交=8 交易日=200  最新一笔 T000008 @ 2024-09-27
+           OK 账户/成交/资金曲线全部一致
+           OK 定时任务已自动接回(下轮 10/12 15:30)
+继续推进:   2024-11-05 ~ 2024-11-06 (不重放历史, 资金曲线 202 点无重复)
+=========== E2E 全部通过 ===========
 ```
 
-`paper/store.py` 现已在 main 上。**剩下的只有接线与调度。**
+⚠️ 注意 `next_run=10/12`（周一）：周末被 cron 结构性排除，不是靠任务内判断。
 
-### 4.3 🟢 P2：PRD 记录的技术债
+### 4.3 接线时踩过的三个坑（都已写进代码注释）
+
+这三个坑的共同特征还是**不报错**：
+
+| # | 坑 | 症状 | 处理 |
+|---|---|------|------|
+| 1 | **只恢复账户、不恢复推进游标** | 重启后 `step()` 从数据区间开头重推，在交易过的日期上再交易一遍 —— 成交记录**变多**而不是变空，资金曲线出现重复日期 | 游标与账户一起落盘：`PaperEngine.state_dict()` / `load_state()`，游标存在 `_metadata.cursor` |
+| 2 | **先建空账户再替换 `engine.account`** | `Broker` 仍绑在被丢弃的空账户上，之后成交全记到"影子账户"，界面上的账户永远不动 | 账户通过**构造参数**注入，让 `Broker` 从一开始就绑对（`PaperEngine(account=...)`） |
+| 3 | `CronTrigger` 的 import 在 `_ensure_scheduler()` **之前** | 缺 apscheduler 时抛裸 `ImportError`，调用方的 `except MissingDependencyError` 接不住 → 变 500，且重启恢复会失败 | 先 `_ensure_scheduler()` 再 import trigger（`test_restore_reports_missing_dependency` 锁住） |
+
+第 3 条是**测试抓出来的**，不是看代码看出来的 —— 写"失败可见"的测试是划算的。
+
+### 4.3.1 ⚠️ 验证脚本自己也骗过我一次（本轮最值得记住的教训）
+
+第一版 `verify_paper_restart.ps1` **全绿通过**了两轮，但**什么都没验证到**：
+
+| 环节 | 真实情况 |
+|---|---|
+| `Start-Process python` | Windows 上 `python` 解析成 `C:\windows\system32\python.cmd` —— 一个 **cmd 外壳**；真正跑 uvicorn 的 `python.exe` 是它的**子进程** |
+| `Stop-Process -Id $wrapper` | 只杀掉外壳，真进程继续占着端口 |
+| 之后的"重启" | `Wait-Health` 连到了**同一个还没死的服务**上 |
+| 结果 | "重启后状态完全一致"必然成立 —— 因为压根没重启 |
+
+**识破它的是数据对不上**：第二次跑 200 个交易日，区间却是 `2024-11-07 ~ 2025-08-29`
+（接着上一次的进度），交易日数 `402 = 202 + 200`。干净起点应该永远从 `2024-01-03` 开始。
+
+最终版加了三道结构性防线，任何一道不满足就直接失败：
+
+1. 用**真解释器**（`python -c "import sys;print(sys.executable)"`）启动
+2. 启动前**确认端口空闲**（否则会连到旧服务）
+3. 跑之前**确认账户是干净的**（`交易日=0 成交=0`）
+
+教训与项目既有结论一致：**"全绿"可能是假保险，要问自己"这个绿灯有没有可能恒亮"。**
+真正的重启验证必须能失败 —— 先确认旧服务真的死了，再谈新服务。
+
+另外两个实测记录在案的设计决定：
+
+- **`Account` 没有 `symbols` / `data_source` / `start_date`**（踩过 `AttributeError`）。
+  这些存在 `_metadata` 里，`store.load_metadata()` 负责读回来。取数区间必须与落盘时
+  一致 —— 游标存的是**数据行下标**，窗口一变下标就指向别的日期。
+- **换股票池 = 重置账户**。旧成交/资金曲线是在旧池子上产生的，拼接两段会让夏普、
+  回撤、超额全变成无意义的混合体。故 `_rebuild_engine()` 显式重置并在响应里返回
+  `account_reset=true`，同时立刻落盘（免得重启后旧账户"复活"）。
+
+### 4.4 定时运行的默认行为
+
+| 项 | 值 |
+|---|---|
+| 默认时间 | 每交易日 **15:30**（15:00 收盘后 30 分钟），每次推进 1 个交易日 |
+| 周末 | cron `day_of_week=mon-fri` 排除 |
+| 节假日 | 可选 `data/paper/holidays.json`（`["2026-10-01", ...]`）<br>**未提供时只排除周末**，`GET /api/paper/schedule` 返回 `holiday_calendar=false` + warning（刻意不内置一份可能过期的节假日表） |
+| 重入 | `max_instances=1` + `coalesce=True`：上轮没跑完就跳过，休眠错过只补跑一次 |
+| 失败 | 成功/失败/跳过全部写入可查询 status（`run_count`/`error_count`/`skipped_count`/`consecutive_failures`/`last_error`），异常进日志 |
+| 落盘失败 | 「跑成功但没存下来」按**失败**处理 —— 否则会出现"每天都在跑、账却不动" |
+| 重启 | 配置写 `data/paper/schedule.json`，`create_app()` 时自动接回；缺依赖显式报错 |
+| 并发 | 定时任务在线程池、API 在事件循环，故每账户一把可重入锁，防止同一笔挂单被撮两次 |
+
+启用方式（单 worker！）：
+
+```bash
+curl -X POST localhost:8000/api/paper/schedule -H 'Content-Type: application/json' \
+     -d '{"account_id":"default","hour":15,"minute":30,"days":1}'
+curl localhost:8000/api/paper/schedule          # 查状态(含最近一次成败原因)
+curl -X DELETE localhost:8000/api/paper/schedule
+```
+
+### 4.5 🟢 P2：PRD 记录的技术债
 
 | 编号 | 内容 | 优先级 |
 |------|------|--------|
-| TD-01 | 多 worker 状态共享 | 已收口为「启动即报错」守卫；真正共享需抽独立服务 |
+| TD-01 | 多 worker 状态共享 | 已收口为「启动即报错」守卫；真正共享需抽独立服务。**定时调度同样假定单 worker**（每进程一份调度器会让同一账户被重复推进） |
+| TD-02 | 前端没有定时开关 | 目前只能通过 API 开启，Tab 上无按钮 |
 | TD-03 | RL Agent 超参调优（Optuna） | P3 待办 |
 | TD-05 | Web Dashboard 用户认证 | P4 待办 |
 | TD-06 | 实时行情 WebSocket | P4 待办 |
 | TD-07 | Docker 化部署 | P4 待办 |
 
 ---
+
 
 ## 五、接手必读：工作方式约定
 
@@ -203,6 +269,10 @@ pip install -e ".[dev]"
    - 合并前本地先跑一遍能省一轮往返
    - 无 optional 依赖的环境（只装 `.[dev,quant]`）是 CI 主 job 的真实状态，
      **推送前应模拟**（`pip uninstall apscheduler fastapi starlette` 后跑）
+   - 不想动环境也可以用 stub 模块挡在 `PYTHONPATH` 前面。⚠️ 但 stub 只挡你列出的包，
+     **pass/skip 的拆分与真实 CI 会不一致**：本轮 stub 模拟出 `674 passed / 28 skipped`，
+     真实 CI 是 `666 passed / 36 skipped`（收集总数 702 一致）。
+     结论：stub 能用来确认「不会失败」，**不能用来写文档里的数字** —— 数字以 CI 为准。
 
 ### 5.3 测试方法论（本项目最重要的方法论）
 
@@ -216,6 +286,13 @@ pip install -e ".[dev]"
 本项目已 4 次靠变异验证发现问题（均价测试、文档警示测试、
 `RetryError` 测试、基准测试）。其中后两条最初都是**假保险** ——
 测试 mock 抛的是 `RuntimeError` 而真实故障是 `RetryError`。
+
+2026-10-10 又做了两次变异验证（都确认锁是真的）：
+- 去掉 `engine.load_state(metadata)` → `test_restart_does_not_replay_history` 红
+- 去掉「落盘失败按失败处理」→ `test_persist_failure_counts_as_failure` 红
+
+**验证脚本同样要做"能不能红"的检查**（见 4.3.1）：
+端到端脚本如果永远连到同一个服务上，它会**恒绿**。
 
 **测试不硬编码随环境变化的数字**（如测试总数、收集数），
 只做自洽校验。
@@ -236,22 +313,33 @@ pip install -e ".[dev]"
 ## 六、常用命令速查
 
 ```bash
-# 全部测试（main 基线 650 passed；合并 PR#18 后 664 passed）
+# 全部测试（本地装齐可选依赖: 740 passed, 1 skipped）
 PYTHONPATH=src pytest tests/ -q
 
-# 模拟 CI 主 job（无 optional 依赖）
+# 模拟 CI 主 job（无 optional 依赖: 666 passed, 36 skipped, 0 失败）
 pip uninstall apscheduler fastapi starlette
 PYTHONPATH=src pytest tests/ -q
 
 # 覆盖率
 PYTHONPATH=src pytest tests/ -q --cov=stock_model --cov-report=term
 
-# lint（提交前必跑）
+# lint（提交前必跑；以 CI 的 ruff 版本为准）
 ruff check src/ tests/
 ruff format --check src/ tests/
 
 # 启动服务（单 worker！）
 uvicorn --app-dir src "stock_model.web.app:create_app" --factory --port 8000
+
+# 开启模拟盘定时运行（默认每交易日 15:30 推进 1 天）
+curl -X POST localhost:8000/api/paper/schedule \
+     -H 'Content-Type: application/json' \
+     -d '{"account_id":"default","hour":15,"minute":30,"days":1}'
+curl localhost:8000/api/paper/schedule            # 查状态(含最近一次成败原因)
+curl -X POST localhost:8000/api/paper/schedule/run   # 立即跑一次(与定时同一路径)
+curl -X DELETE localhost:8000/api/paper/schedule  # 停止
+
+# 端到端验证「重启后状态还在」(真实网络 + 真起服务 + 真强杀)
+pwsh -NoProfile -File experiments/verify_paper_restart.ps1
 
 # 四个实验脚本（需真实网络，稳定环境跑）
 python experiments/run_regime_test.py            # 分组对照
@@ -268,18 +356,23 @@ python experiments/run_trend_filter_test.py      # 趋势过滤器效果
 1. 读 docs/strategy-evaluation-2026-10-07.md
    └─ 理解「为什么不要急着改策略」
 
-2. 合并 PR #18（持久化模块）
+2. 把定时运行打开，让它真实跑 2-4 周   ← 现在唯一该做的事
+   ├─ 单 worker 启动，POST /api/paper/schedule（默认每交易日 15:30）
+   ├─ 隔几天 GET /api/paper/schedule 看一眼 run_count / error_count
+   │    └─ error_count 涨了就是真出问题，别假设"它自己在跑"
+   └─ 想要精确排除节假日就补 data/paper/holidays.json（不提供则只排周末）
 
-3. 接线 paper_api + 加定时调度   ← 用户当前诉求
-   ├─ ⚠️ 注意 Account 无 symbols 属性，配置在 _metadata（详见 docs/HANDOVER.md 4.1）
-   ├─ 必须做「重启后状态还在」的端到端验证
-   └─ 完成后去掉 tests/test_paper_store.py 里那条 skip
+3. 收集到足够数据（建议 ≥ 20 笔成交）后，再评估策略
+   ├─ 那时才有资格谈「实盘信号质量」
+   └─ 别在没有新数据时重复本轮的试错（详见第三节）
 
-4. 让模拟盘真实跑 2-4 周，收集实盘数据
-
-5. 基于实盘数据再决定是否调整策略方向
-   └─ 别在没有新数据时重复本轮的试错
+4. 若要动前端：目前定时开关只有 API，Tab 上没有按钮（TD-02）
+   └─ 后端状态含 next_run_time / last_status / warnings，够画一个状态卡
 ```
+
+> ⚠️ **别把定时运行当成"设好就不用管了"**：目前没有通知渠道，
+> 出问题只会进日志和 `GET /api/paper/schedule` 的 `last_error`。
+> 想省心就加一条盯着 `consecutive_failures` 的检查（或在 CI 之外的 cron 里 curl 一下）。
 
 ---
 
@@ -290,8 +383,12 @@ python experiments/run_trend_filter_test.py      # 趋势过滤器效果
 本轮 15 个缺陷里，多个会产出**漂亮但错误的数据**
 （静默输出 0、显示「运行中」但没跑、超额改善 39 个百分点的伪信号）。
 
-接手后请保持两个习惯：
+2026-10-10 这一轮又添了一个同款：**验证脚本自己连到了没被杀掉的服务上，
+于是"重启后状态一致"必然成立 —— 全绿，却什么都没验证到**（见 4.3.1）。
+
+接手后请保持三个习惯：
 - **写完锁做变异验证** —— 全绿可能是假保险
+- **问自己"这个绿灯有没有可能恒亮"** —— 尤其是端到端验证
 - **看到反常结论先查数据来源** —— 别急着下结论
 
 🤖 本文档由 Mavis 生成于 2026-10-09

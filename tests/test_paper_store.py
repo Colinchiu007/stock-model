@@ -2,12 +2,15 @@
 
 背景
 ----
-``web/paper_api.py`` 的引擎只存在进程内存的 ``_engines`` 字典,
+``web/paper_api.py`` 的引擎原本只存在进程内存的 ``_engines`` 字典,
 进程重启后持仓/成交/资金曲线全丢。对「手动点几轮」无所谓,
 但**定时运行**是致命的 —— 重启一次就可能丢状态甚至重复交易。
 
 ``Account`` 早已具备 ``to_json`` / ``from_json``, 但 API 层从未调用。
 本模块负责落盘与恢复, 并保证原子写入(不产生半截文件)。
+
+2026-10-10: ``paper_api`` 已完成接线, ``TestPrerequisiteForScheduling``
+里那条 skip 改为真断言。
 """
 
 import json
@@ -19,6 +22,7 @@ from stock_model.paper.store import (
     delete_account,
     list_accounts,
     load_account,
+    load_metadata,
     save_account,
     store_path,
 )
@@ -147,21 +151,88 @@ class TestPrerequisiteForScheduling:
     def test_paper_api_imports_store(self):
         """API 层必须使用 store 模块, 否则重启即丢状态
 
-        当前为 skip: store 模块已就绪但尚未接线。
-        接线方需在 paper_api 中调用 save_account/load_account, 然后去掉 skip。
-        这条锁的存在本身就在提醒: 定时任务上线前必须完成接线。
+        这条锁此前是 skip 状态, 用来提醒「持久化模块已就绪但尚未接线」。
+        2026-10-10 已接线, 故改为真断言 —— **不得再退回 skip**:
+        退回 skip 就等于允许「重启丢状态且不报错」再次发生。
         """
         import inspect
 
         from stock_model.web import paper_api
 
         src = inspect.getsource(paper_api)
-        if "paper.store" not in src:
-            pytest.skip("paper_api 尚未接入 store —— 定时运行前必须接线, 否则重启丢状态")
-        assert "paper.store" in src
+        assert "paper.store" in src, (
+            "paper_api 未接入 store —— 定时运行会丢状态且不报错(这条锁就是防这个的)"
+        )
+        assert "save_account" in src, "paper_api 必须实际调用 save_account, 只 import 不算接线"
+        assert "load_account" in src, "paper_api 必须实际调用 load_account, 否则重启无法恢复"
 
     def test_store_module_exists(self):
         from stock_model.paper import store
 
         assert hasattr(store, "save_account")
         assert hasattr(store, "load_account")
+
+
+class TestMetadata:
+    """``_metadata``: 账户之外那部分状态(股票池 / 取数区间 / 推进游标)
+
+    恢复引擎时**只能**从这里拿 —— ``Account`` 上并没有 ``symbols`` /
+    ``data_source`` / ``start_date``(踩过: 照直觉写 ``account.symbols``
+    直接 AttributeError)。
+    """
+
+    def test_round_trip(self, store_dir):
+        meta = {"symbols": ["000002"], "start_date": "20240101", "cursor": {"000002": 7}}
+        save_account(make_account(), store_dir, metadata=meta)
+        back = load_metadata("test", store_dir)
+        assert back["symbols"] == ["000002"]
+        assert back["cursor"] == {"000002": 7}
+
+    def test_missing_file_returns_empty(self, store_dir):
+        """没落盘过 → 空字典(调用方回退默认配置), 不抛异常"""
+        assert load_metadata("never-saved", store_dir) == {}
+
+    def test_account_file_without_metadata(self, store_dir):
+        """老版本落盘的文件没有 _metadata —— 必须容忍, 不能崩"""
+        save_account(make_account(), store_dir)
+        assert load_metadata("test", store_dir) == {}
+
+    def test_corrupt_file_returns_empty(self, store_dir):
+        """坏文件只该让元数据缺失, 不该让账户打不开"""
+        store_dir.mkdir(parents=True, exist_ok=True)
+        store_path("broken", store_dir).write_text("{ 坏 JSON", encoding="utf-8")
+        assert load_metadata("broken", store_dir) == {}
+
+    def test_non_dict_metadata_ignored(self, store_dir):
+        """_metadata 被人手改成了数组/字符串 → 忽略并告警, 不炸"""
+        store_dir.mkdir(parents=True, exist_ok=True)
+        path = store_path("weird", store_dir)
+        path.write_text(json.dumps({"account_id": "weird", "_metadata": [1, 2]}), encoding="utf-8")
+        assert load_metadata("weird", store_dir) == {}
+
+    def test_metadata_does_not_break_account_load(self, store_dir):
+        """带 _metadata 的文件仍能正常恢复账户"""
+        save_account(make_account(), store_dir, metadata={"symbols": ["000002"]})
+        assert load_account("test", store_dir) is not None
+
+
+class TestAtomicWriteHelper:
+    """定时配置与账户共用同一个原子写入实现"""
+
+    def test_no_temp_left_and_readable(self, tmp_path):
+        from stock_model.paper.store import write_json_atomic
+
+        path = tmp_path / "nested" / "cfg.json"
+        write_json_atomic(path, {"a": 1})
+        assert json.loads(path.read_text(encoding="utf-8")) == {"a": 1}
+        assert list(path.parent.glob("*.tmp")) == []
+
+    def test_failure_leaves_no_temp_file(self, tmp_path):
+        """写入失败时不得残留临时文件"""
+        from stock_model.paper.store import write_json_atomic
+
+        path = tmp_path / "cfg.json"
+        with pytest.raises(TypeError):
+            write_json_atomic(path, {"bad": object()})
+        assert list(tmp_path.glob("*.tmp")) == []
+        assert not path.exists()

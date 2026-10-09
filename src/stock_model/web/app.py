@@ -624,6 +624,22 @@ def create_app(config: dict | None = None) -> Any:
 
         register_paper_routes(app)
 
+        # ---- 模拟盘定时任务恢复 ----
+        # 定时配置落盘在 data/paper/schedule.json, 进程重启后自动接回,
+        # 否则「每天自动跑」会在一次重启后静默失效(用户以为还在跑)。
+        # 没有配置文件时这里什么都不做, 也不会起后台线程。
+        try:
+            from stock_model.paper.scheduler import get_scheduler
+            from stock_model.web.paper_api import run_paper_cycle
+
+            _paper_sched = get_scheduler()
+            _paper_sched.set_runner(run_paper_cycle)
+            _restored = _paper_sched.restore()
+            if _restored.get("error"):
+                logger.error(f"模拟盘定时任务未能恢复: {_restored['error']}")
+        except ImportError as err:  # pragma: no cover - 仅在缺可选依赖时
+            logger.error(f"模拟盘定时任务恢复不可用: {err}")
+
         return app
 
     except ImportError as err:

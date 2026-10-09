@@ -163,13 +163,13 @@ T+1日:   以 df[T+1].open 撮合 → 成交记录 → 持仓更新
 - 创建账户（初始资金可设）
 - 「执行今日」：拉当日数据 → 跑策略 → 生成订单
 - 「推进一日」：T+1 开盘撮合 → 更新持仓
-- 自动模式：定时任务每交易日收盘后自动执行
+- **自动模式**：定时任务每交易日收盘后自动执行 —— **已实现（2026-10-10）**，
+  见下方「定时运行」一节
 
 ### API 端点
 
 | 端点 | 用途 |
 |------|------|
-| `POST /api/paper/account` | 创建账户 |
 | `GET /api/paper/account` | 账户总览 |
 | `GET /api/paper/positions` | 当前持仓 |
 | `GET /api/paper/trades` | 成交记录 |
@@ -177,6 +177,47 @@ T+1日:   以 df[T+1].open 撮合 → 成交记录 → 持仓更新
 | `POST /api/paper/run` | 执行今日策略（生成订单） |
 | `GET /api/paper/metrics` | 绩效指标 |
 | `GET /api/paper/equity` | 资金曲线 |
+| `GET /api/paper/universe` | 动态构建候选股票池 |
+| `POST /api/paper/reset` | 重置账户（同时清磁盘状态） |
+| `POST /api/paper/schedule` | **开启**定时运行（每天几点 / 间隔分钟） |
+| `DELETE /api/paper/schedule` | **停止**定时运行 |
+| `GET /api/paper/schedule` | 查询定时状态（含最近一次执行的成败原因） |
+| `POST /api/paper/schedule/run` | 立即按定时路径执行一次 |
+
+---
+
+## P0（续）：状态持久化与定时运行
+
+> 2026-10-10 完成。起因：模拟盘原本只能手动点，且引擎只在进程内存里 ——
+> 定时跑的前提是**重启不丢状态**。
+
+### FR-P0-07: 账户状态持久化
+
+| 项 | 实现 |
+|---|---|
+| 落盘时机 | 每次 `step()` / `run()` 之后；`reset` 时删除 |
+| 落盘内容 | `Account` 全量 + `_metadata`（股票池 / 取数区间 / **推进游标**） |
+| 写入方式 | 先写同目录临时文件再 `os.replace`，避免半截文件 |
+| 恢复 | 启动或首次访问账户时按 `account_id` 读取；损坏文件只丢该账户，不崩服务 |
+| 文件位置 | `data/paper/{account_id}.json`（已加入 `.gitignore`） |
+
+⚠️ **游标必须一起存**：`Account` 里没有「推进到哪一天」，那在引擎的
+`_cursor` 上。只恢复账户不恢复游标，重启后 `step()` 会从数据区间开头重新推进，
+在交易过的日期上再交易一遍 —— 资金曲线出现重复日期，而且**不报错**。
+
+### FR-P0-08: 定时运行
+
+| 项 | 实现 |
+|---|---|
+| 依赖 | `apscheduler>=3.10`（可选依赖 `[schedule]`），未安装时接口返回 **503** |
+| 默认时间 | 每交易日 **15:30**（A 股 15:00 收盘后 30 分钟）推进 1 个交易日 |
+| 周末 | 由 cron `day_of_week=mon-fri` **结构性排除**，不依赖任务内判断 |
+| 节假日 | 可选 `data/paper/holidays.json`（`["2026-10-01", ...]`）；未提供时仅排除周末，且 `GET /api/paper/schedule` 会返回 `holiday_calendar=false` 并给出 warning |
+| 重入 | `max_instances=1` + `coalesce=True`：上一轮没跑完就跳过本轮；休眠错过只补跑一次 |
+| 失败可见 | 成功 / 失败 / 跳过都写入可查询的 status（`run_count` / `error_count` / `skipped_count` / `consecutive_failures` / `last_error`），异常同时进日志 |
+| 落盘失败 | 「跑成功但没存下来」按**失败**处理（否则会出现"每天都在跑、账却不动"） |
+| 重启恢复 | 配置写 `data/paper/schedule.json`，进程重启后自动接回；缺依赖时显式报错而非静默失效 |
+| 线程安全 | 定时任务在线程池执行、API 在事件循环执行，故每个账户一把可重入锁，防止同一笔挂单被撮两次 |
 
 ---
 
@@ -187,10 +228,12 @@ T+1日:   以 df[T+1].open 撮合 → 成交记录 → 持仓更新
 ```
 src/stock_model/paper/
 ├── models.py       # Account / Position / Order / Trade / EquityPoint
-├── account.py      # 账户状态管理 + 不变量校验
 ├── broker.py       # 撮合引擎（T+1开盘价、涨跌停、费用）
+├── engine.py       # 逐日推进流水线（step / run / report + 进度状态）
 ├── metrics.py      # 绩效计算
-└── store.py        # 持久化 (JSON / 可换 SQLite)
+├── universe.py     # 动态股票池（三层筛选）
+├── store.py        # 持久化（原子写 JSON，可换 SQLite）
+└── scheduler.py    # 定时运行（APScheduler + 交易日/失败可见/配置落盘）
 ```
 
 ### 为什么独立于现有回测
@@ -202,6 +245,9 @@ src/stock_model/paper/
 
 默认 JSON 文件（`data/paper/{account_id}.json`），单账户场景足够。
 预留 `store.py` 接口便于日后换 SQLite。
+
+运行时文件（账户快照 / 定时配置 / 临时文件）**不进版本库**：
+`.gitignore` 忽略 `data/paper/*`，仅放行人工维护的 `holidays.json`。
 
 ---
 
@@ -218,8 +264,10 @@ src/stock_model/paper/
 - [ ] 佣金有 5 元下限
 - [ ] 最大回撤、夏普、胜率计算正确（用构造数据验证）
 - [ ] 交易笔数 < 20 时报告显式警告"样本不足"
-- [ ] 全部 8 个 API 端点可用
+- [ ] 全部 13 个 API 端点可用
 - [ ] Web 界面 5 个区块可渲染
+- [ ] **重启进程后账户/持仓/成交/资金曲线不丢**（端到端验证，见 `docs/HANDOVER.md`）
+- [ ] 定时任务可开启/停止/查询，非交易日跳过且留痕
 - [ ] ruff 0 errors，全量测试通过
 
 ---

@@ -31,6 +31,17 @@ data/cache/
 *.xlsx
 *.parquet
 
+# 模拟盘运行时状态 (账户快照 / 定时配置 / 原子写入的临时文件)
+# 属本机运行数据, 不该进版本库 —— 提交上去会让别人拉到你的持仓。
+# holidays.json 是人工维护的节假日表(配置), 故显式排除在外。
+# 注意必须写成 data/paper/* (而非 data/paper/): 目录整体被忽略时,
+# 后面的 ! 规则无法把子文件捞回来。
+data/paper/*
+!data/paper/holidays.json
+
+# 端到端验证脚本的 transcript (每次跑都会覆盖)
+experiments/_verify_output.txt
+
 # Jupyter
 .ipynb_checkpoints/
 

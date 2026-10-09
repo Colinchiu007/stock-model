@@ -75,17 +75,26 @@ stock-model/
 │   │   ├── config.py          # 流水线配置 (YAML支持)
 │   │   ├── models.py          # 执行结果/状态模型
 │   │   └── trading_pipeline.py # 8步编排 (采集→质量→分析→策略→风控→仓位→推送)
+│   ├── paper/                 # 🆕 模拟盘 (真实时间线验证策略)
+│   │   ├── models.py          # 账户/持仓/订单/成交/资金曲线
+│   │   ├── broker.py          # 撮合引擎 (T+1开盘价/A股费用/涨跌停)
+│   │   ├── engine.py          # 逐日推进 + 进度状态(游标, 重启恢复用)
+│   │   ├── metrics.py         # 绩效指标 (含样本不足警告)
+│   │   ├── universe.py        # 动态股票池 (三层筛选)
+│   │   ├── store.py           # 账户状态原子落盘/恢复
+│   │   └── scheduler.py       # 🆕 定时运行 (APScheduler, 交易日/失败可见)
 │   ├── visualization/         # 可视化层
 │   │   └── charts.py          # 图表 (Plotly)
 │   ├── web/                   # 🆕 Web Dashboard
 │   │   ├── app.py             # FastAPI应用 (Pipeline控制/SSE)
 │   │   ├── screener.py        # 🆕 选股/分析/回测 API
+│   │   ├── paper_api.py       # 🆕 模拟盘 API (含定时运行端点)
 │   │   └── static/            # 🆕 前端资源 (html/css/js)
 │   └── utils/                 # 工具
 │       ├── logger.py          # 日志 (loguru)
 │       └── helpers.py         # 辅助函数
 ├── examples/                  # 示例脚本
-├── tests/                     # 测试 (591个)
+├── tests/                     # 测试 (741个)
 ├── docs/                      # 架构/PRD/复盘文档
 ├── .github/workflows/         # CI/CD (GitHub Actions)
 └── pyproject.toml             # 项目配置
@@ -297,8 +306,41 @@ python examples/demo.py
 | `POST /api/pipeline/{start,stop,run}` | 定时流水线控制 |
 | `GET /api/events` | SSE 实时推送 |
 | `GET /api/health` | 健康检查 |
+| `GET /api/paper/{account,positions,trades,metrics,equity}` | 模拟盘账户 / 持仓 / 成交 / 绩效 / 资金曲线 |
+| `POST /api/paper/{step,run,reset}` | 推进一个交易日 / 连续推进 N 日 / 重置账户 |
+| `GET /api/paper/universe` | 动态构建候选股票池 |
+| `POST /api/paper/schedule` | **开启模拟盘定时运行**（默认每交易日 15:30） |
+| `DELETE /api/paper/schedule` | 停止定时运行 |
+| `GET /api/paper/schedule` | 定时状态（含下次执行时间与最近一次成败原因） |
+| `POST /api/paper/schedule/run` | 立即按定时路径执行一次 |
 
 交互式文档：启动服务后访问 `http://localhost:8000/docs`
+
+### 🆕 模拟盘自动运行 (`paper/`)
+
+模拟盘用 1 万元虚拟资金按**真实时间线**逐日推进（T+1 次日开盘价撮合）。
+它现在可以**持久化 + 每天自动跑**：
+
+```bash
+# 开启（单 worker 启动服务后）
+curl -X POST localhost:8000/api/paper/schedule \
+     -H 'Content-Type: application/json' \
+     -d '{"account_id":"default","hour":15,"minute":30,"days":1}'
+curl localhost:8000/api/paper/schedule    # 查状态（run/error/skipped + 最近错误 + 下次执行时间）
+```
+
+- **重启不丢状态**：账户与**推进游标**一起原子落盘到 `data/paper/{account_id}.json`，
+  进程重启后恢复。只恢复账户不恢复游标会导致重启后在已交易过的日期上再交易一遍。
+- **交易日**：cron 只在周一~周五触发；节假日可放 `data/paper/holidays.json`
+  （未提供时只排除周末，接口会返回 `holiday_calendar=false` 提示）。
+- **失败不静默**：每轮的成败/跳过都写进可查询的状态，异常进日志；
+  「跑成功但没落盘」按失败处理。
+- 端到端验证（真起服务 → 强杀 → 重启 → 比对）：`pwsh -File experiments/verify_paper_restart.ps1`
+- 详细设计见 [`docs/phase4_prd_paper_trading.md`](docs/phase4_prd_paper_trading.md)，
+  交接与踩坑记录见 [`docs/HANDOVER.md`](docs/HANDOVER.md)。
+
+⚠️ 定时运行**必须在单 worker 下**：每个 worker 一份调度器会让同一账户被重复推进
+（项目已在启动时用 `_assert_single_worker` 拒绝多 worker）。
 
 ### 🆕 技术指标 (`analysis/indicators.py`)
 
@@ -351,11 +393,23 @@ pytest tests/test_bug_regressions.py -v     # 缺陷回归保护
 pytest tests/test_parquet_fallback.py -v    # 缺可选依赖的降级路径
 ```
 
-当前共 **591** 个测试（582 passed + 9 skipped），代码覆盖率 **81%**。
+当前共 **741** 个测试。CI 各 job 实测：
 
-> **关于跳过的测试**：9 个 skip 均为「可选依赖未安装」类
-> （如 pyarrow / fastapi 未装时相关用例跳过）。**skip 不代表通过**，
-> 本项目已要求关键路径在缺依赖时降级而非跳过，并有对应测试锁定该行为。
+| Job | 结果 |
+|-----|------|
+| Test（Python 3.10 / 3.11 / 3.12） | 666 passed, 36 skipped, **0 失败** |
+| Test Optional Dependencies（装齐 `[dev,quant,schedule,web,ta]`） | 732 passed, 9 skipped |
+
+覆盖率 **81%**。两个 job 的**收集总数本就不同**（缺 fastapi 时整个 `test_web_app.py`
+作为一个 skip 条目），这是环境差异、不是文档该对齐的数字。
+
+> **关于跳过的测试**：skip 均为「可选依赖未安装」类
+> （如 pyarrow / pandas-ta / ta-lib / fastapi / apscheduler 未装时相关用例跳过）。
+> **skip 不代表通过**，本项目已要求关键路径在缺依赖时降级而非跳过，并有对应测试锁定该行为。
+>
+> 模拟盘**持久化接线**的用例（`tests/test_paper_persistence.py`）刻意不依赖任何可选依赖，
+> 在 CI 主 job 里也照跑 —— 它们锁的是「重启不丢状态」，不该被环境差异掩盖。
+> 定时运行的用例需要 `apscheduler`，缺依赖时跳过。
 
 ## CI/CD
 
