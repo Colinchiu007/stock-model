@@ -15,7 +15,6 @@ from stock_model.analysis.fundamental import FundamentalAnalysis
 from stock_model.analysis.signals import SignalGenerator, SignalStrength, SignalType
 from stock_model.analysis.technical import TechnicalAnalysis
 from stock_model.strategy.base import ActionType, BaseStrategy, StrategyResult
-from stock_model.strategy.trend_filter import TrendFilter
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -35,13 +34,26 @@ class ManualStrategy(BaseStrategy):
     name = "manual"
     description = "手动综合策略 - 技术分析+基本面分析"
 
-    def __init__(self, use_trend_filter: bool = True):
+    def __init__(self, use_trend_filter: bool = False):
         """手动策略
 
         Args:
-            use_trend_filter: 是否启用趋势过滤（拦截逆势买卖）。
-                置 False 可回到过滤前的原始行为，便于做 A/B 对照。
+            use_trend_filter: 趋势过滤(逆势买卖拦截)。**默认关闭**。
+
+                实测结论（experiments/run_trend_filter_test.py, 动态池,
+                2019-2024 六组市场环境）:
+
+                    上涨市平均超额  -42.66% -> -45.02%  (-2.36pp)
+                    下跌市平均超额  +37.48% -> +33.37%  (-4.11pp)
+                    横盘市平均超额   +5.90% ->  +0.78%  (波动)
+
+                核心目标(改善上涨市)**未达成**, 且跌市抗跌能力受损。
+                净效果为负, 故默认关闭。模块保留供后续研究,
+                但不要在未重新验证前启用。
         """
+        if use_trend_filter:
+            from stock_model.strategy.trend_filter import TrendFilter
+
         self.ta = TechnicalAnalysis()
         self.signals = SignalGenerator()
         self.fundamental = FundamentalAnalysis()

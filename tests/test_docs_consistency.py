@@ -187,13 +187,29 @@ class TestStrategyEvaluationDoc:
         assert "逆势" in eval_doc, "评估报告必须说明上涨市跑输的根因"
         assert "67%" in eval_doc or "100%" in eval_doc, "应给出逆势卖出的量化占比"
 
-    def test_doc_mentions_trend_filter(self, eval_doc):
-        """必须记录趋势过滤器这一修复, 及其验证状态
+    def test_doc_records_negative_result(self, eval_doc):
+        """必须记录趋势过滤器是负面实验（已默认关闭）
 
-        未完成的验证也要写清楚, 不能让人误以为已验证有效。
+        负面结论与正面结论同等重要 —— 不记录, 下一个人会基于同一个直觉
+        再实现一遍。故此处锁定「必须记录该结论 + 默认关闭」。
         """
-        assert "趋势过滤" in eval_doc
+        assert "趋势过滤" in eval_doc, "评估报告必须提及趋势过滤器实验"
         assert "trend_filter" in eval_doc, "应指向 trend_filter 模块"
+        assert "默认关闭" in eval_doc or "净效果" in eval_doc, (
+            "必须明确记录该实验的结论(默认关闭/净效果为负), 不能只字不提"
+        )
+
+    def test_code_defaults_trend_filter_off(self):
+        """代码默认必须关闭趋势过滤 —— 与文档结论一致"""
+        import inspect
+
+        from stock_model.strategy.manual import ManualStrategy
+
+        src = inspect.getsource(ManualStrategy.__init__)
+        assert "use_trend_filter: bool = False" in src, (
+            "ManualStrategy 的 use_trend_filter 默认值必须是 False —— "
+            "实测该过滤器净效果为负(涨市-2.36pp / 跌市-4.11pp)"
+        )
 
     def test_doc_warns_about_manual_stock_pool(self, eval_doc):
         """必须警示股票池是人工挑选且同质 —— 这是数据不可信的根本原因"""
