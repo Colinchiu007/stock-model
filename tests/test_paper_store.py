@@ -110,7 +110,7 @@ class TestAtomicWrite:
         """重复保存不得产生多份状态文件"""
         for _ in range(3):
             save_account(make_account(), store_dir)
-        files = [p for p in store_dir.glob("*.json")]
+        files = list(store_dir.glob("*.json"))
         assert len(files) == 1, f"应只有一份状态文件, 实际 {files}"
 
     def test_concurrent_save_no_corruption(self, store_dir):
