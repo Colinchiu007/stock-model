@@ -94,7 +94,7 @@ stock-model/
 │       ├── logger.py          # 日志 (loguru)
 │       └── helpers.py         # 辅助函数
 ├── examples/                  # 示例脚本
-├── tests/                     # 测试 (702个)
+├── tests/                     # 测试 (741个)
 ├── docs/                      # 架构/PRD/复盘文档
 ├── .github/workflows/         # CI/CD (GitHub Actions)
 └── pyproject.toml             # 项目配置
@@ -393,14 +393,23 @@ pytest tests/test_bug_regressions.py -v     # 缺陷回归保护
 pytest tests/test_parquet_fallback.py -v    # 缺可选依赖的降级路径
 ```
 
-当前共 **702** 个测试（CI 主 job：674 passed + 28 skipped；装齐可选依赖后 740 passed + 1 skipped），代码覆盖率 **81%**。
+当前共 **741** 个测试。CI 各 job 实测：
 
-> **关于跳过的测试**：28 个 skip 均为「可选依赖未安装」类
-> （如 pyarrow / fastapi / apscheduler 未装时相关用例跳过）。**skip 不代表通过**，
-> 本项目已要求关键路径在缺依赖时降级而非跳过，并有对应测试锁定该行为。
+| Job | 结果 |
+|-----|------|
+| Test（Python 3.10 / 3.11 / 3.12） | 666 passed, 36 skipped, **0 失败** |
+| Test Optional Dependencies（装齐 `[dev,quant,schedule,web,ta]`） | 732 passed, 9 skipped |
+
+覆盖率 **81%**。两个 job 的**收集总数本就不同**（缺 fastapi 时整个 `test_web_app.py`
+作为一个 skip 条目），这是环境差异、不是文档该对齐的数字。
+
+> **关于跳过的测试**：skip 均为「可选依赖未安装」类
+> （如 pyarrow / pandas-ta / ta-lib / fastapi / apscheduler 未装时相关用例跳过）。
+> **skip 不代表通过**，本项目已要求关键路径在缺依赖时降级而非跳过，并有对应测试锁定该行为。
 >
-> 定时运行相关用例需要 `apscheduler`；持久化接线的用例**不需要任何可选依赖**，
+> 模拟盘**持久化接线**的用例（`tests/test_paper_persistence.py`）刻意不依赖任何可选依赖，
 > 在 CI 主 job 里也照跑 —— 它们锁的是「重启不丢状态」，不该被环境差异掩盖。
+> 定时运行的用例需要 `apscheduler`，缺依赖时跳过。
 
 ## CI/CD
 

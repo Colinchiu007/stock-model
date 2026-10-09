@@ -5,10 +5,13 @@
 > **仓库**：`Colinchiu007/stock-model`（A股量化分析工具）
 > **文档性质**：接手前必读。读完能明白「做了什么、为什么这么做、接下来该做什么」。
 
-> **测试基线说明**：
-> - 装齐可选依赖：`740 passed, 1 skipped`
-> - 模拟 CI 主 job（无 fastapi / apscheduler）：`674 passed, 28 skipped`，0 失败
-> - 变化原因：`test_paper_store.py` 里那条 skip 已改为真断言（+1 pass），
+> **测试基线说明**（PR #19 合并后 CI 实测，6/6 全绿）：
+> - `Test Optional Dependencies`（装齐可选依赖）：**732 passed, 9 skipped**
+> - `Test (3.10 / 3.11 / 3.12)`（只装 `.[dev,quant]`）：**666 passed, 36 skipped, 0 失败**
+> - 本地装齐依赖：`740 passed, 1 skipped`
+> - 两个 job 的**收集总数本就不同**（缺 fastapi 时 `test_web_app.py` 整体算一个 skip 条目），
+>   别拿一个环境的数字去改另一个环境的文档
+> - 变化原因：`test_paper_store.py` 里那条 skip 已改为真断言，
 >   新增 59 个测试（持久化 14 / 调度 32 / 端点 13），`test_paper_store.py` 另加 8 个
 > - 状态：**无未合并 PR**
 
@@ -266,7 +269,10 @@ pip install -e ".[dev]"
    - 合并前本地先跑一遍能省一轮往返
    - 无 optional 依赖的环境（只装 `.[dev,quant]`）是 CI 主 job 的真实状态，
      **推送前应模拟**（`pip uninstall apscheduler fastapi starlette` 后跑）
-   - 不想动环境也可以用 stub 模块挡在 `PYTHONPATH` 前面（本轮就是这么模拟的）
+   - 不想动环境也可以用 stub 模块挡在 `PYTHONPATH` 前面。⚠️ 但 stub 只挡你列出的包，
+     **pass/skip 的拆分与真实 CI 会不一致**：本轮 stub 模拟出 `674 passed / 28 skipped`，
+     真实 CI 是 `666 passed / 36 skipped`（收集总数 702 一致）。
+     结论：stub 能用来确认「不会失败」，**不能用来写文档里的数字** —— 数字以 CI 为准。
 
 ### 5.3 测试方法论（本项目最重要的方法论）
 
@@ -307,10 +313,10 @@ pip install -e ".[dev]"
 ## 六、常用命令速查
 
 ```bash
-# 全部测试（装齐可选依赖: 740 passed, 1 skipped）
+# 全部测试（本地装齐可选依赖: 740 passed, 1 skipped）
 PYTHONPATH=src pytest tests/ -q
 
-# 模拟 CI 主 job（无 optional 依赖: 674 passed, 28 skipped, 0 失败）
+# 模拟 CI 主 job（无 optional 依赖: 666 passed, 36 skipped, 0 失败）
 pip uninstall apscheduler fastapi starlette
 PYTHONPATH=src pytest tests/ -q
 
