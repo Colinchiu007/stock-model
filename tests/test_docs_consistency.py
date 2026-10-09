@@ -180,16 +180,12 @@ class TestStrategyEvaluationDoc:
         关键是「必须存在一个上涨市跑输的实测数字」。
         """
         assert "上涨市" in eval_doc
-        assert "-39.08%" in eval_doc or "-41.32%" in eval_doc, (
-            "上涨市跑输基准的实测数字必须保留"
-        )
+        assert "-39.08%" in eval_doc or "-41.32%" in eval_doc, "上涨市跑输基准的实测数字必须保留"
 
     def test_doc_records_root_cause(self, eval_doc):
         """必须记录根因: 逆势卖出 —— 否则后来者会重走弯路"""
         assert "逆势" in eval_doc, "评估报告必须说明上涨市跑输的根因"
-        assert "67%" in eval_doc or "100%" in eval_doc, (
-            "应给出逆势卖出的量化占比"
-        )
+        assert "67%" in eval_doc or "100%" in eval_doc, "应给出逆势卖出的量化占比"
 
     def test_doc_mentions_trend_filter(self, eval_doc):
         """必须记录趋势过滤器这一修复, 及其验证状态

@@ -18,8 +18,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import pandas as pd
-
 from stock_model.analysis.signals import SignalGenerator
 from stock_model.paper.engine import PaperEngine
 
@@ -44,7 +42,7 @@ class ThresholdStrategy:
         self.sg = SignalGenerator()
         self.name = f"manual_t{threshold}"
 
-    def analyze(self, symbol: str, df: pd.DataFrame):
+    def analyze(self, symbol: str, df):
         from stock_model.strategy.base import ActionType, StrategyResult
 
         enriched = self.ta.analyze_all(df)
@@ -62,7 +60,6 @@ class ThresholdStrategy:
         else:
             action, conf = ActionType.HOLD, 0.5
 
-        close = float(df["close"].iloc[-1])
         return StrategyResult(
             symbol=symbol,
             action=action,

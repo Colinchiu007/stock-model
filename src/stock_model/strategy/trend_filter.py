@@ -35,8 +35,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
 
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class TrendState(str, Enum):
@@ -93,7 +95,7 @@ class TrendFilter:
 
     # ==================== 趋势判定 ====================
 
-    def judge(self, df: pd.DataFrame) -> TrendState:
+    def judge(self, df: pd.DataFrame) -> TrendState:  # noqa: PLR0911
         """判定当前趋势状态
 
         Args:
