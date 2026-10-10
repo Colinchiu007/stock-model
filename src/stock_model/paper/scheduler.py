@@ -107,33 +107,64 @@ class ScheduleState:
     last_status: str = ""  # ok | error | skipped
     last_error: str = ""
     last_result: dict[str, Any] = field(default_factory=dict)
+    # ---- 告警(失败提醒) ----
+    alert_count: int = 0  # 实际发出的告警条数
+    last_alert_at: str = ""
+    last_alert_error: str = ""  # 告警**本身**失败的原因(不能静默)
 
 
 class PaperScheduler:
     """模拟盘定时调度器(进程内单例, 与单 worker 约束一致)
 
-    执行体由外部注入(``set_runner``), 这样调度器本身不必知道 API 层怎么建引擎,
-    也便于测试时换成假的执行体。
+    执行体与告警通道都由外部注入(``set_runner`` / ``set_alerter``), 这样调度器
+    本身不必知道 API 层怎么建引擎、也不必认识 notify 模块 —— 只负责"什么时候跑、
+    跑失败了叫一声"。好处是它可以被单独测试。
     """
 
     def __init__(
         self,
         schedule_file: Path | None = None,
         holiday_file: Path | None = None,
+        alert_every_n_failures: int = 3,
     ) -> None:
         self._schedule_file = schedule_file or DEFAULT_SCHEDULE_FILE
         self._states: dict[str, ScheduleState] = {}
         self._scheduler: Any = None
         self._runner: Callable[[str, int], dict[str, Any]] | None = None
+        self._alerter: Callable[[str], None] | None = None
+        self._alerter_description = ""
+        # 连续失败时每 N 次再提醒一次(首次必提醒); 0 = 只提醒首次
+        self._alert_every = max(0, int(alert_every_n_failures))
         self._lock = threading.RLock()
         self._holidays = load_holidays(holiday_file)
         self._restore_error = ""
 
-    # ==================== 执行体 ====================
+    # ==================== 执行体 / 告警通道 ====================
 
     def set_runner(self, runner: Callable[[str, int], dict[str, Any]] | None) -> None:
         """注入执行体: ``runner(account_id, days) -> {"status": ..., "persisted": bool}``"""
         self._runner = runner
+
+    def set_alerter(
+        self,
+        alerter: Callable[[str], None] | None,
+        *,
+        description: str = "",
+        every_n_failures: int | None = None,
+    ) -> None:
+        """注入告警通道: ``alerter(message)``
+
+        Args:
+            description: 人类可读的通道描述, 回显在 status 里 ——
+                让"以为配了其实没配"这件事可见。
+            every_n_failures: 连续失败时每 N 次再提醒一次(首次必提醒);
+                不给则沿用构造时的默认值。节流策略跟着通道走, 因为它
+                本质是"这个通道能承受多少噪音"。
+        """
+        self._alerter = alerter
+        self._alerter_description = description
+        if every_n_failures is not None:
+            self._alert_every = max(0, int(every_n_failures))
 
     # ==================== 时区 ====================
 
@@ -293,6 +324,7 @@ class PaperScheduler:
         info["schedule"] = self._describe(state)
         info["holiday_calendar"] = bool(self._holidays)
         info["next_run_time"] = self._next_run_time(state.account_id)
+        info["alert_channel"] = self._alerter_description or "(未接入告警通道)"
         info["warnings"] = self._warnings(state)
         return info
 
@@ -311,6 +343,14 @@ class PaperScheduler:
             )
         if state.consecutive_failures >= 2:
             warns.append(f"已连续失败 {state.consecutive_failures} 次, 请查看 last_error")
+        if self._alerter is None:
+            # 这条很重要: 定时任务失败了却没人知道, 等于"自动化"只做了一半
+            warns.append(
+                "未接入告警通道 —— 失败只会进日志, 不会主动通知你。"
+                "可在 .env 里配置 STOCK_NOTIFY_WEBHOOK_URL(钉钉/飞书/企业微信)"
+            )
+        if state.last_alert_error:
+            warns.append(f"上一条告警发送失败: {state.last_alert_error}")
         return warns
 
     def _next_run_time(self, account_id: str) -> str:
@@ -393,6 +433,8 @@ class PaperScheduler:
                     result=result,
                 )
 
+            # 从连续失败中恢复: 先记下前值再清零, 否则"恢复了"这件事没人知道
+            was_failing = state.consecutive_failures
             state.run_count += 1
             state.consecutive_failures = 0
             state.last_status = "ok"
@@ -405,6 +447,16 @@ class PaperScheduler:
                 f"[paper-schedule] 账户 {account_id} 定时执行完成: "
                 f"{result.get('steps', 0)} 步, 成交 {result.get('trades', 0)} 笔"
             )
+            if was_failing:
+                # 失败→成功 是状态变化, 值得一条通知: 否则用户只知道"坏过",
+                # 不知道"什么时候好了"
+                self._alert(
+                    state,
+                    now,
+                    f"✅ 模拟盘定时执行已恢复\n账户: {account_id}\n"
+                    f"此前连续失败: {was_failing} 次\n"
+                    f"本次结果: {result.get('steps', 0)} 步, 成交 {result.get('trades', 0)} 笔",
+                )
             return {"status": "ok", "account_id": account_id, **state.last_result}
 
     def _record_failure(
@@ -414,7 +466,7 @@ class PaperScheduler:
         exc: Exception,
         result: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """记录失败 —— 日志 + 可查询的 status 双写, 不允许静默"""
+        """记录失败 —— 日志 + 可查询的 status 双写 + **主动告警**, 不允许静默"""
         state.error_count += 1
         state.consecutive_failures += 1
         state.last_status = "error"
@@ -425,7 +477,42 @@ class PaperScheduler:
             f"[paper-schedule] 账户 {state.account_id} 定时执行失败"
             f"(连续第 {state.consecutive_failures} 次): {state.last_error}"
         )
+        n = state.consecutive_failures
+        # 告警节流: 首次必发; 之后每 N 次再发一次(默认 N=3)。
+        # 为什么不一失败就发: 连着一周每天都失败会刷屏, 人会把通知静音 ——
+        # 那才是真正的"失败被静默"。消息里带连续次数, 升级趋势仍可见。
+        should_alert = n == 1 or (self._alert_every > 0 and n % self._alert_every == 0)
+        if should_alert:
+            self._alert(
+                state,
+                now,
+                f"⚠️ 模拟盘定时执行失败\n账户: {state.account_id}\n"
+                f"时间: {now.strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"连续失败: {n} 次\n"
+                f"原因: {state.last_error}\n"
+                f"排查: GET /api/paper/schedule?account_id={state.account_id}",
+            )
         return {"status": "error", "account_id": state.account_id, "error": state.last_error}
+
+    def _alert(self, state: ScheduleState, now: datetime, message: str) -> None:
+        """发出告警
+
+        **告警失败绝不能影响被监控的任务** —— 通道挂了不该把定时运行也带崩,
+        但也不能静默: 原因写进 ``state.last_alert_error`` 并打 error 日志,
+        status 接口会回显。
+        """
+        if self._alerter is None:
+            return
+        try:
+            self._alerter(message)
+        except Exception as e:
+            # 通道类型是任意可调用对象, 必须全部兜住 —— 告警炸了不能带崩调度
+            state.last_alert_error = f"{type(e).__name__}: {e}"
+            logger.error(f"[paper-schedule] 账户 {state.account_id} 告警发送失败: {e}")
+            return
+        state.alert_count += 1
+        state.last_alert_at = now.isoformat()
+        state.last_alert_error = ""
 
     # ==================== 配置持久化 ====================
 

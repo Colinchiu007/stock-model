@@ -83,6 +83,33 @@ class VisualizationSettings(BaseSettings):
     export_format: str = Field(default="html", description="导出格式: html/png/svg/pdf")
 
 
+class NotifySettings(BaseSettings):
+    """推送/告警配置
+
+    环境变量前缀 ``STOCK_NOTIFY_``，也可写在 ``.env`` 里。
+
+    用途：把**系统级失败**（如模拟盘定时任务连续失败）主动推给用户，
+    而不必等用户哪天想起来去看接口。默认只开控制台 —— 不配 webhook
+    也至少能在日志里看到，配了则手机上能收到。
+    """
+
+    model_config = SettingsConfigDict(env_prefix="STOCK_NOTIFY_")
+
+    enabled: bool = Field(default=True, description="总开关；false 时完全不推送告警")
+    console: bool = Field(default=True, description="是否输出到控制台")
+    file_path: str | None = Field(
+        default=None, description="告警落盘文件(JSON 行), 如 data/paper/alerts.jsonl"
+    )
+    webhook_url: str | None = Field(
+        default=None, description="Webhook 地址(钉钉/飞书/企业微信机器人), 含 token 属凭据"
+    )
+    webhook_timeout: int = Field(default=10, description="Webhook 超时(秒)")
+    alert_every_n_failures: int = Field(
+        default=3,
+        description="连续失败时每 N 次再提醒一次(首次失败必提醒)；设 0 表示只提醒首次",
+    )
+
+
 class Settings(BaseSettings):
     """全局配置"""
 
@@ -100,6 +127,7 @@ class Settings(BaseSettings):
     data: DataSettings = Field(default_factory=DataSettings)
     analysis: AnalysisSettings = Field(default_factory=AnalysisSettings)
     visualization: VisualizationSettings = Field(default_factory=VisualizationSettings)
+    notify: NotifySettings = Field(default_factory=NotifySettings)
 
     # 日志
     log_level: str = Field(default="INFO", description="日志级别")

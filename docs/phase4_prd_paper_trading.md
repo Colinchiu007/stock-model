@@ -219,6 +219,24 @@ T+1日:   以 df[T+1].open 撮合 → 成交记录 → 持仓更新
 | 重启恢复 | 配置写 `data/paper/schedule.json`，进程重启后自动接回；缺依赖时显式报错而非静默失效 |
 | 线程安全 | 定时任务在线程池执行、API 在事件循环执行，故每个账户一把可重入锁，防止同一笔挂单被撮两次 |
 
+### FR-P0-09: 失败告警（2026-10-10 补）
+
+定时运行的最后一块不是"每天自动跑"，而是"**跑挂了会有人知道**"。
+没有告警时 `last_error` 摆在那儿，但没人会天天去看接口。
+
+| 项 | 实现 |
+|---|---|
+| 通道 | 复用 `notify/`（控制台 / 文件 / Webhook，支持钉钉·飞书·企业微信），不另起传输 |
+| 接口改动 | `NotificationChannel.send(message, result=None)` —— `result` 改为可选，系统告警传 `None`（告警没有 `StrategyResult`） |
+| 配置 | `STOCK_NOTIFY_*` 环境变量 / `.env`，见 `.env.example`；**不改代码** |
+| 触发 | 失败（含"跑成功但没落盘"）；**首次必发**，之后每 N 次（默认 3）再发一次；失败→恢复也发一条 |
+| 不触发 | 非交易日跳过、正常成功 |
+| 隔离 | 告警通道异常**不影响调度**（否则"通知挂了"会升级成"定时任务挂了"），原因记入 `last_alert_error` 与 status warning |
+| 可见 | `GET /api/paper/schedule` 回显 `alert_channel`（Webhook **只显主机名**，URL 含 token 属凭据）/ `alert_count` / `last_alert_at` / `last_alert_error`；未接通道时给 warning |
+
+**为什么不"一失败就发"**：连着一周失败会刷屏，通知被静音的下一步就是问题被静默。
+节流消息里带累计失败次数，升级趋势仍然可见。
+
 ---
 
 ## 技术方案

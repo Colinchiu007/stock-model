@@ -664,11 +664,11 @@ def create_app(config: dict | None = None) -> Any:
         # 否则「每天自动跑」会在一次重启后静默失效(用户以为还在跑)。
         # 没有配置文件时这里什么都不做, 也不会起后台线程。
         try:
-            from stock_model.paper.scheduler import get_scheduler
-            from stock_model.web.paper_api import run_paper_cycle
+            from stock_model.web.paper_api import configure_paper_scheduler
 
-            _paper_sched = get_scheduler()
-            _paper_sched.set_runner(run_paper_cycle)
+            # 复用 paper_api 的装配入口: 执行体与告警通道一起配上,
+            # 避免"启动恢复这条路径上漏配告警"这种局部失效。
+            _paper_sched = configure_paper_scheduler()
             _restored = _paper_sched.restore()
             if _restored.get("error"):
                 logger.error(f"模拟盘定时任务未能恢复: {_restored['error']}")
