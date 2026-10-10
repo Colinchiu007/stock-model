@@ -50,6 +50,28 @@
       <span id="pp-range" class="muted"></span>
     </div>
 
+    <!-- 定时运行：让"每天自动跑"不必再靠 curl，而且能一眼看到上次成没成。
+         设计约定：状态不明就说"状态不明"，缺依赖就禁用按钮并写明原因，
+         失败时把 last_error 原文显示出来 —— 不做"看起来在跑"的假象。 -->
+    <div class="card schedule-card" id="pp-sched-card">
+      <div class="sched-head">
+        <span class="card-label">定时运行（每交易日自动推进）</span>
+        <span id="pp-sched-state" class="badge idle" role="status" aria-live="polite">加载中…</span>
+      </div>
+      <div class="sched-line" id="pp-sched-plan">—</div>
+      <div class="sched-line muted" id="pp-sched-last">—</div>
+      <div class="sched-line muted" id="pp-sched-alert">—</div>
+      <div id="pp-sched-warns" class="hidden" role="status" aria-live="polite"></div>
+      <div class="sched-actions">
+        <label for="pp-sched-time">每日执行时间</label>
+        <input type="time" id="pp-sched-time" value="15:30">
+        <button class="btn primary" id="pp-sched-start">开启定时</button>
+        <button class="btn" id="pp-sched-stop">停止</button>
+        <button class="btn" id="pp-sched-run">立即执行一次</button>
+        <span id="pp-sched-msg" class="muted" role="status" aria-live="polite"></span>
+      </div>
+    </div>
+
     <div id="pp-loading" class="loading hidden">
       <div class="spinner"></div>
       <span>模拟中… 逐日推进需拉取并处理真实行情，600+ 交易日约需数分钟</span>
