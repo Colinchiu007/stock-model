@@ -149,7 +149,9 @@ class TradingEnv:
 
         # 奖励函数
         if reward_fn is None:
-            self._reward_fn = default_reward
+            # 注解: 不写时 mypy 会拿 default_reward 的函数类型当属性类型,
+            # 后面赋 Callable 就报 assignment 不兼容(2 处, 非运行时缺陷)
+            self._reward_fn: RewardFn = default_reward
         elif isinstance(reward_fn, str):
             self._reward_fn = BUILTIN_REWARDS.get(reward_fn, default_reward)
         else:
@@ -265,7 +267,8 @@ class TradingEnv:
         self._total_value = self.initial_balance
         self._prev_value = self.initial_balance
         self._done = False
-        self._returns_history = []  # 重置收益历史(用于sharpe/sortino奖励)
+        # 注解: 不写时 mypy 会从 [] 推断成 list[<nothing>], 报 var-annotated
+        self._returns_history: list[float] = []  # 重置收益历史(用于sharpe/sortino奖励)
         self._info = {
             "balance": self._balance,
             "shares": self._shares,
@@ -480,7 +483,9 @@ class MultiStockTradingEnv:
 
         # 奖励函数
         if reward_fn is None:
-            self._reward_fn = default_reward
+            # 注解: 不写时 mypy 会拿 default_reward 的函数类型当属性类型,
+            # 后面赋 Callable 就报 assignment 不兼容(2 处, 非运行时缺陷)
+            self._reward_fn: RewardFn = default_reward
         elif isinstance(reward_fn, str):
             self._reward_fn = BUILTIN_REWARDS.get(reward_fn, default_reward)
         else:

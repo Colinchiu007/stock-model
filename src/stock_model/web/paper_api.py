@@ -22,9 +22,13 @@
 from __future__ import annotations
 
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from stock_model.paper.engine import PaperEngine
+    from stock_model.paper.models import Account
 
 DISCLAIMER = "模拟盘 · 非真实交易, 不构成投资建议"
 
@@ -34,7 +38,7 @@ DISCLAIMER = "模拟盘 · 非真实交易, 不构成投资建议"
 FALLBACK_SYMBOLS = ["000002", "000001", "600036"]
 
 # 进程内单例(单 worker 场景足够, 与现有 pipeline 状态一致)
-_engines: dict[str, Any] = {}
+_engines: dict[str, PaperEngine] = {}
 
 # 每个账户一把可重入锁: 定时任务在线程池里跑, 而 API 请求在事件循环里跑,
 # 两者会同时碰同一个引擎。引擎不是线程安全的 —— 不加锁就可能出现
@@ -50,28 +54,33 @@ def _account_lock(account_id: str) -> threading.RLock:
         return _locks[account_id]
 
 
-def _engine_metadata(engine: Any) -> dict[str, Any]:
+def _engine_metadata(engine: PaperEngine) -> dict[str, Any]:
     """引擎状态 → 落盘的 ``_metadata``(含游标, 丢了就会重放历史)"""
-    return engine.state_dict()
+    state: dict[str, Any] = engine.state_dict()
+    return state
 
 
-def _persist(account_id: str, engine: Any) -> bool:
+def _persist(account_id: str, engine: PaperEngine) -> tuple[bool, str]:
     """落盘账户 + 引擎进度
 
     Returns:
-        True 落盘成功; False 失败(已记 error 日志, 并把原因留在
-        ``engine._last_persist_error`` 供响应体返回 —— **不静默吞掉**)
+        ``(是否成功, 失败原因)``。**失败不抛异常**, 而是把原因交回调用方,
+        由调用方放进响应体 / 调度状态里 —— 定时场景下"跑成功但没存下来"
+        等同于失败, 绝不能静默吞掉。
+
+    实现上刻意不往 engine 上挂 ``_last_persist_error``: 那个属性不属于引擎,
+    动态挂载会绕过类型检查(mypy 的 no-any-return 就出在这附近),
+    也会让"错误传递"变成隐性契约。
     """
     from stock_model.paper.store import save_account
 
     try:
         save_account(engine.account, metadata=_engine_metadata(engine))
     except OSError as e:
-        engine._last_persist_error = f"{type(e).__name__}: {e}"
-        logger.error(f"模拟盘状态落盘失败 account={account_id}: {e}")
-        return False
-    engine._last_persist_error = ""
-    return True
+        reason = f"{type(e).__name__}: {e}"
+        logger.error(f"模拟盘状态落盘失败 account={account_id}: {reason}")
+        return False, reason
+    return True, ""
 
 
 def _default_start_date(symbols: list[str]) -> str:
@@ -79,7 +88,9 @@ def _default_start_date(symbols: list[str]) -> str:
     return "20190101" if len(symbols) > 3 else "20240101"
 
 
-def _build_engine(account_id: str, metadata: dict[str, Any], account: Any | None) -> Any:
+def _build_engine(
+    account_id: str, metadata: dict[str, Any], account: Account | None
+) -> PaperEngine:
     """按落盘配置构造引擎
 
     恢复场景(``account`` 非空)传 ``validate_symbols=False``:
@@ -114,7 +125,7 @@ def _build_engine(account_id: str, metadata: dict[str, Any], account: Any | None
     return engine
 
 
-def _get_engine(account_id: str = "default") -> Any:
+def _get_engine(account_id: str = "default") -> PaperEngine:
     """取或建引擎实例(进程重启后从磁盘恢复)"""
     if account_id in _engines:
         return _engines[account_id]
@@ -141,7 +152,7 @@ def _get_engine(account_id: str = "default") -> Any:
         return engine
 
 
-def _rebuild_engine(account_id: str, symbols: list[str]) -> Any:
+def _rebuild_engine(account_id: str, symbols: list[str]) -> PaperEngine:
     """按新股票池重建引擎(**开一轮新模拟**)
 
     为什么换池要连账户一起重置, 而不是只换标的列表:
@@ -187,7 +198,7 @@ def run_paper_cycle(account_id: str, days: int) -> dict[str, Any]:
     with _account_lock(account_id):
         engine = _get_engine(account_id)
         steps = engine.run(days=max(1, int(days)))
-        persisted = _persist(account_id, engine)
+        persisted, persist_error = _persist(account_id, engine)
         return {
             "status": "ok",
             "steps": len(steps),
@@ -197,7 +208,7 @@ def run_paper_cycle(account_id: str, days: int) -> dict[str, Any]:
             "total_asset": round(engine.account.total_asset, 2),
             "symbols": engine.symbols,
             "persisted": persisted,
-            "persist_error": getattr(engine, "_last_persist_error", ""),
+            "persist_error": persist_error,
             "disclaimer": DISCLAIMER,
         }
 
@@ -279,9 +290,10 @@ def register_paper_routes(app: Any) -> None:
                 logger.error(f"模拟盘推进失败: {e}")
                 return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
-            result["persisted"] = _persist(account_id, engine)
-            if not result["persisted"]:
-                result["persist_error"] = getattr(engine, "_last_persist_error", "")
+            persisted, persist_error = _persist(account_id, engine)
+            result["persisted"] = persisted
+            if not persisted:
+                result["persist_error"] = persist_error
             return result
 
     @app.post("/api/paper/run")
@@ -312,7 +324,7 @@ def register_paper_routes(app: Any) -> None:
                 logger.error(f"模拟盘批量执行失败: {e}")
                 return {"status": "error", "error": f"{type(e).__name__}: {e}"}
 
-            persisted = _persist(account_id, engine)
+            persisted, persist_error = _persist(account_id, engine)
             return {
                 "status": "ok",
                 "steps": len(steps),
@@ -323,7 +335,7 @@ def register_paper_routes(app: Any) -> None:
                 "symbols": engine.symbols,
                 "account_reset": pool_changed,
                 "persisted": persisted,
-                "persist_error": getattr(engine, "_last_persist_error", ""),
+                "persist_error": persist_error,
                 "disclaimer": DISCLAIMER,
             }
 

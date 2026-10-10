@@ -211,9 +211,18 @@ class StockDataFetcher:
             self_session.trust_env = False
 
         # 避免重复patch
+        #
+        # mypy: 这是在给第三方类打猴子补丁 —— 赋值 __init__ 与新增私有标记属性
+        # 本来就超出 requests 的类型声明, 三个错误都是"补丁本身"的必然结果,
+        # 不是缺陷。故按错误码精确豁免, 不用整段 ignore。
+        #
+        # ⚠️ 本地 requests 较旧(不带 py.typed)时**看不到**这些错误;
+        # CI 的 requests 2.34+ 自带类型信息, 才会报出来。
+        # 也就是说 `ignore_missing_imports` 只豁免"缺 stub", 不豁免
+        # "stub 在场时的真实错误" —— 以 CI 为准。
         if not getattr(requests.Session, "_trust_env_patched", False):
-            requests.Session.__init__ = _patched_init
-            requests.Session._trust_env_patched = True
+            requests.Session.__init__ = _patched_init  # type: ignore[method-assign, assignment]
+            requests.Session._trust_env_patched = True  # type: ignore[attr-defined]
 
     # ==================== 缓存 ====================
 

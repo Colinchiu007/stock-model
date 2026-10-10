@@ -78,7 +78,8 @@ class TradePair:
             self.sell_trade.timestamp, pd.Timestamp
         ):
             delta = self.sell_trade.timestamp - self.buy_trade.timestamp
-            return max(1, delta.days)
+            # int() 显式收口: pandas 无 stub, delta.days 是 Any
+            return int(max(1, delta.days))
         return 1
 
     def __str__(self) -> str:
@@ -291,7 +292,10 @@ class BacktestEngine:
         # 基准对比
         benchmark = self._calc_benchmark(equity_history, df)
 
-        result = BacktestResult(
+        # 变量名必须换: 同函数上文 (循环里) 已把 result 绑成 StrategyResult,
+        # 复用会让 mypy 一直按 StrategyResult 推断 → 294/308/311 三处误报
+        # (运行时一直是 BacktestResult, 是注解推断问题不是缺陷)
+        bt_result = BacktestResult(
             strategy_name=strategy.name,
             symbol=symbol,
             initial_cash=self.initial_cash,
@@ -305,10 +309,10 @@ class BacktestEngine:
 
         logger.info(
             f"回测完成: {strategy.name} / {symbol}, "
-            f"收益率={result.total_return:.2%}, 交易={len(trades)}笔, "
+            f"收益率={bt_result.total_return:.2%}, 交易={len(trades)}笔, "
             f"胜率={trade_analysis.win_rate:.2%}, Alpha={benchmark.alpha:.2%}"
         )
-        return result
+        return bt_result
 
     def _calculate_metrics(
         self, equity_history: list[float], trades: list[Trade]
@@ -682,7 +686,9 @@ class StrategyEngine:
             ActionType.SELL: sell_score,
             ActionType.HOLD: hold_score,
         }
-        best_action = max(scores, key=scores.get)
+        # 用具名函数做 key 而不是 scores.get: 后者是重载方法, mypy 无法匹配
+        # `Callable[[ActionType], SupportsDunderLT]` (arg-type 报错)
+        best_action = max(scores, key=lambda action: scores[action])
         best_confidence = scores[best_action]
 
         # 价格字段: 取产生最高信心那一档的建议值

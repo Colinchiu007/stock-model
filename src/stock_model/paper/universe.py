@@ -287,9 +287,12 @@ class UniverseSelector:
             return None if math.isnan(f) else f
 
         amounts = [_to_f(r[5]) for r in rows[-20:]]
-        amounts = [a for a in amounts if a is not None]
+        # 变量名分开: 复用 amounts 会让 mypy 保持 list[float | None] 的推断,
+        # 于是下面 sum() 被报成「参数类型应为 Iterable[bool]」(假错误)。
+        # 运行时一直是正确的 —— 过滤确实生效了, 只是类型收窄跨不过重新赋值。
+        valid_amounts = [a for a in amounts if a is not None]
         return {
-            "amount": sum(amounts) / len(amounts) if amounts else 0.0,
+            "amount": sum(valid_amounts) / len(valid_amounts) if valid_amounts else 0.0,
             "pe_ttm": _to_f(rows[-1][2]),
             "pb": _to_f(rows[-1][3]),
             "turnover": _to_f(rows[-1][1]),

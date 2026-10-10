@@ -1,18 +1,21 @@
 # 项目交接文档
 
 > **交接对象**：下一个接手的 Agent
-> **交接日期**：2026-10-09（2026-10-10 更新：定时运行已完成）
+> **交接日期**：2026-10-09（2026-10-10 更新：定时运行已完成 + 质量门禁修复）
 > **仓库**：`Colinchiu007/stock-model`（A股量化分析工具）
 > **文档性质**：接手前必读。读完能明白「做了什么、为什么这么做、接下来该做什么」。
 
-> **测试基线说明**（PR #19 合并后 CI 实测，6/6 全绿）：
-> - `Test Optional Dependencies`（装齐可选依赖）：**732 passed, 9 skipped**
-> - `Test (3.10 / 3.11 / 3.12)`（只装 `.[dev,quant]`）：**666 passed, 36 skipped, 0 失败**
-> - 本地装齐依赖：`740 passed, 1 skipped`
-> - 两个 job 的**收集总数本就不同**（缺 fastapi 时 `test_web_app.py` 整体算一个 skip 条目），
->   别拿一个环境的数字去改另一个环境的文档
-> - 变化原因：`test_paper_store.py` 里那条 skip 已改为真断言，
->   新增 59 个测试（持久化 14 / 调度 32 / 端点 13），`test_paper_store.py` 另加 8 个
+> **测试基线说明**（本地 + CI 实测；**mypy 一律以 CI 为准**）
+> - 本地：**760 passed, 1 skipped**（共 761）
+> - CI `Test (3.10 / 3.11 / 3.12)`：**678 passed, 36 skipped, 0 失败**
+> - CI `Test Optional Dependencies`：**752 passed, 9 skipped**（收集总数 761，与本地一致）
+> - CI `Lint`：**`mypy src/stock_model` → Success, no issues found in 57 source files**
+>   （2026-10-10 之前是 86 errors —— 因为 CI 装了 mypy 却从不执行它）
+> - 覆盖率：**85%**
+> - 本轮新增 20 个测试：质量门禁锁 8 / 组合优化分派与守卫 8 / 其它 4
+> - PR #19 的增量：`test_paper_store.py` 那条 skip 改为真断言 + 59 个持久化与调度测试
+> - ⚠️ **不要拿一个环境的数字去改另一个环境的文档**：缺 fastapi 时 `test_web_app.py`
+>   整体算一个 skip 条目，各 job 的收集总数本就不同
 > - 状态：**无未合并 PR**
 
 ---
@@ -20,7 +23,8 @@
 ## 一、一句话现状
 
 **模拟盘已能持久化 + 定时自动运行**（2026-10-10 完成），
-动态选股 / 前端 5 个 Tab / 评估文档均已落地。
+动态选股 / 前端 5 个 Tab / 评估文档均已落地，
+**类型检查门禁已从「装了不跑」修成「真的在跑」**。
 
 **下一步不是写代码，是让它真实跑 2-4 周收集数据**（见第三节、第七节）。
 
@@ -77,7 +81,33 @@
 | `docs/bug-reflection-2026-10-06.md` | 15 个缺陷复盘 + 逃逸分析 |
 | `docs/phase4_prd_paper_trading.md` | 模拟盘 PRD（含持久化 / 定时运行 / 13 个端点） |
 | `experiments/*.py` | 4 个可复现实验脚本 |
+| `docs/bug-reflection-2026-10-10.md` | **假门禁（mypy 装了不跑）+ 空组合静默成功**，含 5 步 SOP 与变异验证记录 |
 | `experiments/verify_paper_restart.ps1` | **可复现**的「重启不丢状态」端到端验证（真起服务 + 真强杀） |
+
+### 2.4 质量门禁修复：一个假门禁 + 一个静默成功的空组合（2026-10-10）
+
+体检（Phase 4）时用 `mypy` 扫了一遍，撞出两件事，详细 5 步 SOP 见
+[`docs/bug-reflection-2026-10-10.md`](bug-reflection-2026-10-10.md)：
+
+| # | 发现 | 引入点 | 性质 |
+|---|------|--------|------|
+| A | **CI 装了 mypy 却从不执行它** —— 存量 86 个类型错误无人可见 | `8097d59`（引入 CI 的提交） | 假门禁 |
+| B | **组合优化在收益率缺失时返回 200 + 空组合**（`weights={}`, `total_value` 悄悄变 0） | `c7feba9`（Phase 2） | 静默错误结果 |
+
+处理结果：
+
+- mypy **86 errors → 0**，并接入 CI 的 Lint job（`mypy src/stock_model`）
+- 豁免清单**点名**写进 `[[tool.mypy.overrides]]`（11 个依赖），刻意不用全局
+  `ignore_missing_imports` —— 全局忽略会让"新引入无类型依赖"彻底不可见
+- 44 个逐个修复的错误里，**真实运行时缺陷 = 0**：全部是注解缺失 / 变量复用致推断错误 /
+  联合类型误报。这条结论很重要 —— 别把"类型检查报错"直接当"有 bug"
+- 组合优化：优化器改为**显式抛错**，端点按分支补守卫并返回 400
+- 新增 8 个质量门禁锁 + 8 个组合优化锁，**4 次变异验证全部确认会红**
+  （其中一次变异暴露了"端点守卫没被独立锁住"，已补）
+
+> **为什么值得记进交接文档**：A 是「装了/配了但不跑」，B 是「返回成功但结果是错的」——
+> 两者都是本项目 15 个历史缺陷的同款形态。README 里那句 `覆盖率 81%` 也是同一类
+> （实际 85%，已修正）。
 
 ---
 
@@ -236,6 +266,7 @@ curl -X DELETE localhost:8000/api/paper/schedule
 | TD-05 | Web Dashboard 用户认证 | P4 待办 |
 | TD-06 | 实时行情 WebSocket | P4 待办 |
 | TD-07 | Docker 化部署 | P4 待办 |
+| TD-08 | **定时失败没有通知渠道** | 出问题只会进日志与 `GET /api/paper/schedule` 的 `last_error`。项目已有 `notify/`（控制台/文件/Webhook 通道），可复用 |
 
 ---
 
@@ -265,8 +296,16 @@ pip install -e ".[dev]"
    - 本地全绿不代表 CI 会绿（已栽 2 次）
    - 以 CI 为准
 
-3. **CI 跑 `ruff check src/ tests/` 和 `pytest tests/`**
+3. **CI 的 Lint job 跑三项：`ruff check` / `ruff format --check` / `mypy src/stock_model`**
    - 合并前本地先跑一遍能省一轮往返
+   - ⚠️ **mypy 需要依赖在场**：缺依赖时它只会报一堆 "Cannot find implementation"，
+     看着跑了其实没查。所以 Lint job 会 `pip install -e ".[dev,quant,schedule,web]"`，
+     本地验证也应保持同一套依赖
+   - ⚠️ **`ignore_missing_imports` 只豁免「缺少」类型信息，不豁免「类型信息在场时的真实错误」。**
+     实测踩过（2026-10-10）：本地 `requests` 无 `py.typed`，`fetcher.py` 的 monkey-patch
+     不报错；CI 的 `requests 2.34+` 自带 `py.typed`，同样的代码多出 3 个错误。
+     同源问题还有 **CI 装的是不带上限的最新依赖**（那次 CI 是 `pandas 3.0.6`，本地 `2.3.3`）。
+     ⇒ **本地 mypy 全绿 ≠ CI 全绿；mypy 门禁一律以 CI 为准**（ruff 版本差异同理，已栽多次）
    - 无 optional 依赖的环境（只装 `.[dev,quant]`）是 CI 主 job 的真实状态，
      **推送前应模拟**（`pip uninstall apscheduler fastapi starlette` 后跑）
    - 不想动环境也可以用 stub 模块挡在 `PYTHONPATH` 前面。⚠️ 但 stub 只挡你列出的包，
@@ -287,9 +326,20 @@ pip install -e ".[dev]"
 `RetryError` 测试、基准测试）。其中后两条最初都是**假保险** ——
 测试 mock 抛的是 `RuntimeError` 而真实故障是 `RetryError`。
 
-2026-10-10 又做了两次变异验证（都确认锁是真的）：
-- 去掉 `engine.load_state(metadata)` → `test_restart_does_not_replay_history` 红
-- 去掉「落盘失败按失败处理」→ `test_persist_failure_counts_as_failure` 红
+2026-10-10 又做了 **6 次**变异验证，每次都确认锁是真的：
+
+| 变异 | 变红的锁 |
+|------|---------|
+| 去掉 `engine.load_state(metadata)` | `test_restart_does_not_replay_history` |
+| 去掉「落盘失败按失败处理」 | `test_persist_failure_counts_as_failure` |
+| 抽掉 CI 里执行 mypy 的步骤 | `test_ci_actually_invokes_mypy` + `test_mypy_step_targets_real_source` |
+| 优化器 `_assert_has_returns` 改回空组合 | `test_empty_returns_raises_instead_of_empty_portfolio[3]` |
+| 只抽掉端点的 returns 守卫 | `test_returns_based_method_without_history_is_rejected[3]` |
+
+> 最后一条是**变异验证逼出来的补锁**：起初端点用例只断言 `400` + `"收益率" in text`，
+> 而优化器的报错同样满足这两条 —— 抽掉端点守卫测试照样绿，**等于守卫没上锁**。
+> 补上「这句措辞只有端点守卫会产生」之后才真正锁住。
+> **教训：一个契约被两处实现满足时，测试锁的是契约，不是任何一处实现。**
 
 **验证脚本同样要做"能不能红"的检查**（见 4.3.1）：
 端到端脚本如果永远连到同一个服务上，它会**恒绿**。
@@ -299,6 +349,9 @@ pip install -e ".[dev]"
 
 **注释里的承诺要 grep 验证**：
 本项目多处「注释说覆盖 X，实测 grep 命中 0」。
+⚠️ 反过来也成立：**注释里提到某个配置键名时，静态检查要先把注释剥掉再匹配** ——
+本轮写 `test_no_global_ignore_missing_imports` 时，就因为注释里引用了
+`ignore_missing_imports` 这个词而误报。
 
 ### 5.4 不可触碰的约束
 
@@ -307,25 +360,27 @@ pip install -e ".[dev]"
 | **单 worker 运行** | `_assert_single_worker` 会拒绝多 worker（TD-01） |
 | **Python ≥3.10** | CI 跑 3.10/3.11/3.12 矩阵 |
 | **不上交代码注释里的 TODO** | 注释承诺与实际覆盖脱节是本项目最大的缺陷来源 |
+| **门禁必须真的执行** | 「装了/配了但不跑」比没有门禁更危险（mypy 案：从 CI 引入起就没执行过） |
 
 ---
 
 ## 六、常用命令速查
 
 ```bash
-# 全部测试（本地装齐可选依赖: 740 passed, 1 skipped）
+# 全部测试（本地装齐可选依赖: 760 passed, 1 skipped）
 PYTHONPATH=src pytest tests/ -q
 
-# 模拟 CI 主 job（无 optional 依赖: 666 passed, 36 skipped, 0 失败）
+# 模拟 CI 主 job（无 optional 依赖；数字会与本地不同, 别互相抄）
 pip uninstall apscheduler fastapi starlette
 PYTHONPATH=src pytest tests/ -q
 
-# 覆盖率
+# 覆盖率（当前 85%）
 PYTHONPATH=src pytest tests/ -q --cov=stock_model --cov-report=term
 
-# lint（提交前必跑；以 CI 的 ruff 版本为准）
+# lint + 类型检查（提交前必跑；以 CI 版本为准）
 ruff check src/ tests/
 ruff format --check src/ tests/
+mypy src/stock_model          # 需要依赖在场, 否则只会报找不到库
 
 # 启动服务（单 worker！）
 uvicorn --app-dir src "stock_model.web.app:create_app" --factory --port 8000

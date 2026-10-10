@@ -159,6 +159,30 @@ class TestPortfolioOptimizer:
         )
         assert len(portfolio.weights) == 3
 
+    @pytest.mark.parametrize("method", ["risk_parity", "min_variance", "mean_variance"])
+    def test_empty_returns_raises_instead_of_empty_portfolio(self, method):
+        """空收益率必须抛错, 不得返回空组合
+
+        缺陷(引入点 c7feba9): 这三处原本是
+            if returns.empty:
+                return Portfolio(name=...)
+        于是"输入不足"与"算完但没权重"在调用方看来完全一样。
+        端点层实测后果: 200 + weights={} + total_value 从 100000 变成 0.0。
+
+        注: 这里用 pytest.raises 而不是断言返回空 —— 后者正是被修掉的行为。
+        """
+        from stock_model.portfolio.optimizer import PortfolioOptimizer
+
+        with pytest.raises(ValueError, match="收益率"):
+            getattr(PortfolioOptimizer(), method)(returns={})
+
+    def test_equal_weight_empty_symbols_raises(self):
+        """空标的列表同样必须抛错, 不能返回空组合"""
+        from stock_model.portfolio.optimizer import PortfolioOptimizer
+
+        with pytest.raises(ValueError, match="标的"):
+            PortfolioOptimizer().equal_weight(symbols=[])
+
     def test_single_asset(self):
         """单资产组合"""
         from stock_model.portfolio.optimizer import PortfolioOptimizer

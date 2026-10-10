@@ -376,6 +376,137 @@ class TestPortfolioAPI:
                 assert data["method"] == "equal_weight"
                 assert "weights" in data
 
+    @staticmethod
+    def _mock_opt_env():
+        """构造端点用的假行情(确定性随机, 便于优化器算协方差)"""
+        import numpy as np
+        import pandas as pd
+
+        return pd.DataFrame(
+            {"close": np.random.default_rng(0).uniform(10, 20, 50)},
+            index=pd.date_range("2024-01-01", periods=50, freq="D"),
+        )
+
+    @pytest.mark.parametrize(
+        ("method", "expect_attr", "expect_kwarg"),
+        [
+            ("equal_weight", "equal_weight", "symbols"),
+            ("risk_parity", "risk_parity", "returns"),
+            ("min_variance", "min_variance", "returns"),
+            ("mean_variance", "mean_variance", "returns"),
+        ],
+    )
+    def test_optimize_portfolio_dispatch(self, client, method, expect_attr, expect_kwarg):
+        """每个 method 必须走到对应的优化器方法, 且用对关键字参数
+
+        为什么补这条: 2026-10-10 把 `method_map + dict.get` 改成显式分支
+        (为了消掉 mypy 的联合类型误报)。而当时的端点测试**只覆盖了
+        equal_weight** —— 另外三条分支怎么改都不会有测试变红。
+        equal_weight 收 `symbols`, 其余三个收 `returns`, 传错就是 500。
+        """
+        df = self._mock_opt_env()
+
+        with patch("stock_model.data.fetcher.StockDataFetcher") as MockFetcher:
+            mock_fetcher = MagicMock()
+            MockFetcher.return_value = mock_fetcher
+            mock_fetcher.get_daily.return_value = df
+
+            with patch("stock_model.portfolio.optimizer.PortfolioOptimizer") as MockOptimizer:
+                mock_opt = MagicMock()
+                MockOptimizer.return_value = mock_opt
+                weight = MagicMock()
+                weight.symbol = "000001"
+                weight.weight = 1.0
+                portfolio = MagicMock()
+                portfolio.weights = [weight]
+                portfolio.total_value = 100000
+                getattr(mock_opt, expect_attr).return_value = portfolio
+
+                resp = client.get(
+                    "/api/portfolio/optimize",
+                    params={"symbols": "000001", "method": method},
+                )
+
+                assert resp.status_code == 200, resp.text
+                called = getattr(mock_opt, expect_attr)
+                assert called.call_count == 1, f"{method} 没走到 {expect_attr}"
+                kwargs = called.call_args.kwargs
+                assert expect_kwarg in kwargs, (
+                    f"{method} 应以 {expect_kwarg}= 调用, 实际参数: {sorted(kwargs)}"
+                )
+
+    def test_optimize_portfolio_unknown_method_falls_back(self, client):
+        """未知 method 回落到 equal_weight —— 与改前的 dict.get 默认值一致
+
+        改写前是 `method_map.get(method, optimizer.equal_weight)`,
+        未知值会落到 else 分支; 显式分支必须保持同一行为。
+        """
+        df = self._mock_opt_env()
+
+        with patch("stock_model.data.fetcher.StockDataFetcher") as MockFetcher:
+            mock_fetcher = MagicMock()
+            MockFetcher.return_value = mock_fetcher
+            mock_fetcher.get_daily.return_value = df
+
+            with patch("stock_model.portfolio.optimizer.PortfolioOptimizer") as MockOptimizer:
+                mock_opt = MagicMock()
+                MockOptimizer.return_value = mock_opt
+                portfolio = MagicMock()
+                portfolio.weights = []
+                portfolio.total_value = 100000
+                mock_opt.equal_weight.return_value = portfolio
+
+                resp = client.get(
+                    "/api/portfolio/optimize",
+                    params={"symbols": "000001", "method": "no_such_method"},
+                )
+
+                assert resp.status_code == 200, resp.text
+                assert mock_opt.equal_weight.call_count == 1, "未知 method 没有回落到 equal_weight"
+                assert "symbols" in mock_opt.equal_weight.call_args.kwargs
+
+    @pytest.mark.parametrize("method", ["risk_parity", "min_variance", "mean_variance"])
+    def test_returns_based_method_without_history_is_rejected(self, client, method):
+        """收益率类方法在行情不足时必须被拒, 不能返回 200 + 空组合
+
+        真实缺陷(引入点 c7feba9, 2026-10-10 发现):
+        标的只有 1 根 K 线 → 算不出 pct_change → returns_dict 为空,
+        而端点只校验了「有没有价格」, 于是:
+            200 {"method":"risk_parity","weights":{},"total_value":0.0}
+        看着像优化成功, 其实什么都没算, 连 total_value 都从 100000 悄悄变成 0。
+
+        这里**刻意硬编码**三个方法名, 不 import 端点里的
+        RETURNS_BASED_METHODS 常量: 否则将来有人新增一个需要收益率的方法
+        却忘了加守卫时, 测试会跟着常量一起漂走, 抓不到。
+        """
+        import pandas as pd
+
+        df = pd.DataFrame(
+            {"close": [10.0]},
+            index=pd.date_range("2024-01-01", periods=1, freq="D"),
+        )
+
+        with patch("stock_model.data.fetcher.StockDataFetcher") as MockFetcher:
+            mock_fetcher = MagicMock()
+            MockFetcher.return_value = mock_fetcher
+            mock_fetcher.get_daily.return_value = df
+
+            resp = client.get(
+                "/api/portfolio/optimize",
+                params={"symbols": "000001", "method": method},
+            )
+
+            assert resp.status_code == 400, (
+                f"{method} 缺收益率数据时应返回 400, 实际 {resp.status_code}: {resp.text[:200]}"
+            )
+            assert "收益率" in resp.text, f"错误信息要说明缺什么, 实际: {resp.text[:200]}"
+            # 这句措辞只有**端点的守卫**会产生; 优化器自己的报错没有这句。
+            # 用它把端点的守卫独立锁住 —— 否则抽掉守卫时, 优化器仍会抛错,
+            # 测试照样绿, 等于守卫没有锁(变异验证时实测发现)。
+            assert "至少 2 根 K 线" in resp.text, (
+                f"应命中端点的前置条件守卫, 实际: {resp.text[:200]}"
+            )
+
 
 class TestQualityAPI:
     """数据质量检查API测试"""

@@ -19,14 +19,24 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
       - name: Install dev dependencies
         run: |
           pip install --upgrade pip
           pip install ruff mypy
+          # mypy 必须**看到依赖**才能真的检查代码: 缺依赖时它只会报一堆
+          # "Cannot find implementation or library stub", 看着跑了其实没查。
+          # 这里装上与主测试 job 一致的一组(rl / ta 两个 extra 除外 ——
+          # 那两类在 pyproject 的 [[tool.mypy.overrides]] 里点名豁免)。
+          pip install -e ".[dev,quant,schedule,web]"
       - name: Ruff check
         run: ruff check src/ tests/
       - name: Ruff format check
         run: ruff format --check src/ tests/
+      - name: Mypy check
+        # 历史上 CI 只 pip install mypy 却从不执行它, 存量 86 个错误无人可见。
+        # 注意不要加 `|| true`: 失败必须让 CI 红。
+        run: mypy src/stock_model
 
   test:
     name: Test (Python ${{ matrix.python-version }})

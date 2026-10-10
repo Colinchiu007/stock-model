@@ -68,7 +68,9 @@ def is_limit_up(bar: pd.Series) -> bool:
     pct = bar.get("pct_change")
     if pct is None or (isinstance(pct, float) and math.isnan(pct)):
         return False
-    return pct >= price_limit_pct(str(bar.get("symbol", ""))) * 100 - 0.3
+    # bool() 是显式收口: pandas 无 stub, pct 是 Any, 直接返回会让
+    # `warn_return_any` 报「Returning Any from function declared to return bool」
+    return bool(pct >= price_limit_pct(str(bar.get("symbol", ""))) * 100 - 0.3)
 
 
 def is_limit_down(bar: pd.Series) -> bool:
@@ -76,7 +78,7 @@ def is_limit_down(bar: pd.Series) -> bool:
     pct = bar.get("pct_change")
     if pct is None or (isinstance(pct, float) and math.isnan(pct)):
         return False
-    return pct <= -price_limit_pct(str(bar.get("symbol", ""))) * 100 + 0.3
+    return bool(pct <= -price_limit_pct(str(bar.get("symbol", ""))) * 100 + 0.3)
 
 
 def is_suspended(bar: pd.Series) -> bool:
@@ -191,15 +193,18 @@ class Broker:
     def _match_one(self, order: Order, bar: pd.Series, trade_date: str) -> Trade | None:
         """撮合单个订单"""
         if is_suspended(bar):
-            return self._reject(order, f"{trade_date} 停牌, 订单顺延")
+            self._reject(order, f"{trade_date} 停牌, 订单顺延")
+            return None
 
         price = float(bar["open"])
         if price <= 0:
-            return self._reject(order, f"{trade_date} 开盘价无效({price})")
+            self._reject(order, f"{trade_date} 开盘价无效({price})")
+            return None
 
         if order.side == Side.BUY:
             if is_limit_up(bar):
-                return self._reject(order, f"{trade_date} 涨停, 买单未成交")
+                self._reject(order, f"{trade_date} 涨停, 买单未成交")
+                return None
             return self._fill_buy(order, price, bar, trade_date)
         return self._fill_sell(order, price, bar, trade_date)
 
@@ -214,7 +219,8 @@ class Broker:
         # 1. 整百
         shares = int(order.shares / LOT_SIZE) * LOT_SIZE
         if shares < LOT_SIZE:
-            return self._reject(order, f"不足 {LOT_SIZE} 股, 拒单")
+            self._reject(order, f"不足 {LOT_SIZE} 股, 拒单")
+            return None
 
         # 2. 现金约束(含费用): 逐档缩量直到能买得起
         while shares >= LOT_SIZE:
@@ -224,12 +230,14 @@ class Broker:
                 break
             shares -= LOT_SIZE
         else:
-            return self._reject(
+            self._reject(
                 order, f"资金不足(可用 {self.account.cash:.2f}, 需 {price * LOT_SIZE:.2f}+费用)"
             )
+            return None
 
         if shares < LOT_SIZE:
-            return self._reject(order, f"资金不足(可用 {self.account.cash:.2f})")
+            self._reject(order, f"资金不足(可用 {self.account.cash:.2f})")
+            return None
 
         amount = price * shares
         fees = calc_fees(Side.BUY, amount)
@@ -253,7 +261,8 @@ class Broker:
                 extra_allowed = max(0.0, allowed_mv - held_mv)
                 max_shares = int(extra_allowed / price / LOT_SIZE) * LOT_SIZE
                 if max_shares < LOT_SIZE:
-                    return self._reject(order, f"超单票集中度上限({self.max_position_pct:.0%})")
+                    self._reject(order, f"超单票集中度上限({self.max_position_pct:.0%})")
+                    return None
                 # 缩量后需重新校验现金充足
                 amount = price * max_shares
                 new_fees = calc_fees(Side.BUY, amount)
@@ -262,7 +271,8 @@ class Broker:
                     amount = price * max_shares
                     new_fees = calc_fees(Side.BUY, amount)
                 if max_shares < LOT_SIZE:
-                    return self._reject(order, f"资金不足(可用 {self.account.cash:.2f})")
+                    self._reject(order, f"资金不足(可用 {self.account.cash:.2f})")
+                    return None
                 shares = max_shares
                 amount = price * shares
                 fees = new_fees
@@ -270,7 +280,8 @@ class Broker:
         # 4. 扣款
         self.account.cash -= amount + fees.total
         if self.account.cash < 0:  # pragma: no cover - 双保险
-            return self._reject(order, "内部错误: 现金将为负")
+            self._reject(order, "内部错误: 现金将为负")
+            return None
 
         # 5. 更新持仓(移动加权平均)
         #    注意: 新建时 avg_cost 必须为 0, 统一由 _recalc_avg_cost 计算。
@@ -299,18 +310,19 @@ class Broker:
     ) -> Trade | None:
         """撮合卖出"""
         if is_limit_down(bar):
-            return self._reject(order, f"{trade_date} 跌停, 卖单未成交")
+            self._reject(order, f"{trade_date} 跌停, 卖单未成交")
+            return None
 
         pos = self.account.get_position(order.symbol)
         if pos is None or pos.shares <= 0:
-            return self._reject(order, "无持仓可卖")
+            self._reject(order, "无持仓可卖")
+            return None
 
         # T+1: 只能卖可卖部分
         shares = min(order.shares, pos.available_shares)
         if shares < LOT_SIZE:
-            return self._reject(
-                order, f"T+1 限制: 当日买入不可卖出(可卖 {pos.available_shares} 股)"
-            )
+            self._reject(order, f"T+1 限制: 当日买入不可卖出(可卖 {pos.available_shares} 股)")
+            return None
 
         amount = price * shares
         fees = calc_fees(Side.SELL, amount)
