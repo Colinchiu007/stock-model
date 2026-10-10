@@ -21,6 +21,7 @@
 
 import pathlib
 import re
+import subprocess
 
 import pytest
 
@@ -73,35 +74,57 @@ class TestReadmeTestCount:
 class TestTextFileLineEndings:
     """行尾不得被整文件改写
 
-    为什么值得上锁：本项目**已踩过两次**同款 —— Windows 上 Python 的
+    为什么值得上锁：本项目**已踩过三次**同款 —— Windows 上 Python 的
     ``Path.write_text()`` 与 PowerShell 的 ``Set-Content`` 都会把 ``\\n`` 写成 ``\\r\\n``。
     后果不是"程序坏了"，而是**一次小改造成几百行的全文件 diff**：
     真实改动被淹没，review 直接失效（最近一次：``docs/HANDOVER.md`` 582 行全文重写）。
 
-    名单只覆盖**当前已经是 LF** 的文件（它们最常被脚本改写）。
-    ``phase2_architecture.md`` / ``phase3_prd.md`` 目前是 CRLF —— 属既有约定，
-    留给后续一次单独的"只改行尾、不改内容"的规范化，不在这里强行改。
+    现状（2026-10-10 起全仓统一为 LF）：``.gitattributes`` 声明 ``* text=auto eol=lf``，
+    本测试是**行为锁** —— git 的归一化只管"提交进去的"，管不到"脚本改完还没提交"的
+    工作区文件，所以必须在测试里再钉一道。
+
+    覆盖范围 = **全部跟踪的文本文件**，而不是一份手写名单 —— 名单会过期，
+    那正是本项目反复踩的"测试与实际脱节"。
     """
 
-    LF_ONLY = (
-        "docs/HANDOVER.md",
-        "docs/phase4_prd_paper_trading.md",
-        "docs/bug-reflection-2026-10-06.md",
-        "docs/bug-reflection-2026-10-10.md",
-        "docs/strategy-evaluation-2026-10-07.md",
-        "src/stock_model/paper/scheduler.py",
-        "data/paper/holidays.json",
-        "experiments/generate_holidays.py",
-    )
+    @staticmethod
+    def _tracked_text_files() -> list[str]:
+        """全部跟踪文件中属于文本的（无二进制 NUL 即视为文本；本仓库无二进制）"""
+        cmd = ["git", "ls-files", "-z"]
+        out = subprocess.run(cmd, capture_output=True, check=False).stdout
+        files = [f for f in out.decode("utf-8").split("\0") if f]
+        text = []
+        for rel in files:
+            p = REPO_ROOT / rel
+            if not p.is_file():
+                continue
+            raw = p.read_bytes()
+            if b"\0" in raw[:8000]:
+                continue
+            text.append(rel)
+        assert text, "没找到任何跟踪文本文件 —— git ls-files 异常"
+        return text
 
-    @pytest.mark.parametrize("rel", LF_ONLY)
-    def test_stays_lf(self, rel):
-        raw = (REPO_ROOT / rel).read_bytes()
-        crlf = raw.count(b"\r\n")
-        assert crlf == 0, (
-            f"{rel} 出现 {crlf} 处 CRLF —— 行尾被整文件改写了。"
-            f"改文件时用 newline='' (Python)，别用 Set-Content (PowerShell)"
+    def test_all_tracked_text_files_are_lf(self):
+        """全仓文本文件必须是 LF（与 .gitattributes 一致）"""
+        offenders = []
+        for rel in self._tracked_text_files():
+            n = (REPO_ROOT / rel).read_bytes().count(b"\r\n")
+            if n:
+                offenders.append(f"{rel} ({n} 处)")
+        assert not offenders, (
+            "以下文件被改成了 CRLF —— 行尾被整文件改写会让真实改动淹没在 diff 里:\n  "
+            + "\n  ".join(offenders)
+            + "\n改文件时用 newline='' (Python)，别用 Set-Content (PowerShell)"
         )
+
+    def test_gitattributes_declares_lf(self):
+        """行尾约定必须有声明文件 —— 否则换个克隆/机器又会漂移"""
+        ga = REPO_ROOT / ".gitattributes"
+        assert ga.is_file(), "缺少 .gitattributes"
+        content = ga.read_text(encoding="utf-8")
+        assert "text=auto" in content, ".gitattributes 缺少 * text=auto"
+        assert "eol=lf" in content, ".gitattributes 缺少 eol=lf"
 
 
 class TestDocNumbersDeclareProvenance:
