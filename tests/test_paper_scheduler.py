@@ -16,6 +16,7 @@ import json
 import sys
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -28,6 +29,8 @@ from stock_model.paper.scheduler import (
     is_trading_day,
     load_holidays,
 )
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 # 2026-10-09 是交易日(周五), 10-10 是周六
 FRIDAY = date(2026, 10, 9)
@@ -146,6 +149,175 @@ class TestHolidayTable:
         info = s.status("default")
         assert info["holiday_calendar"] is False
         assert any("节假日" in w for w in info["warnings"])
+
+    def test_expired_table_is_warned(self, tmp_path):
+        """表过期后 is_trading_day 会**静默**退回"只排周末" —— 必须提示
+
+        否则跨年后节假日照常触发, 用户在界面上看到的是"成功", 与
+        "这天本来就不该跑"完全是两回事。
+        """
+        last_year = datetime.now(CST).year - 1
+        s = make_scheduler(tmp_path, holidays=[f"{last_year}-01-01", f"{last_year}-10-01"])
+        s.set_runner(lambda a, d: {"status": "ok", "persisted": True})
+        register(s)
+        warns = s.status("default")["warnings"]
+        assert any("过期" in w and str(last_year) in w for w in warns), warns
+
+    def test_fresh_table_is_not_warned(self, tmp_path):
+        """覆盖到未来的表不该被告警 —— 否则提示会变成噪音被人忽略"""
+        s = make_scheduler(tmp_path, holidays=["2099-10-01"])
+        s.set_runner(lambda a, d: {"status": "ok", "persisted": True})
+        register(s)
+        warns = s.status("default")["warnings"]
+        assert not any("过期" in w for w in warns), warns
+        assert s.status("default")["holiday_calendar"] is True
+
+    def test_table_with_only_past_dates_this_year_is_not_expired(self, tmp_path):
+        """**回归锁**：本年度的表, 最后一条假日已过去 ≠ 表过期
+
+        真实事故: 2026 年的表最晚一条是 2026-10-07(国庆), 到年底再无节假日。
+        第一版按"最晚日期是否已过去"判断, 于是从 2026-10-08 起**天天误报"已过期"**;
+        而当时的界面断言没抓到 —— 它只查了"未加载节假日表"那条**旧**告警,
+        没查"不该出现的新告警"。**截图抓到了, 断言没抓到。**
+        """
+        y = datetime.now(CST).year
+        s = make_scheduler(tmp_path, holidays=[f"{y}-01-01", f"{y}-10-07"])
+        s.set_runner(lambda a, d: {"status": "ok", "persisted": True})
+        register(s)
+        warns = s.status("default")["warnings"]
+        assert not any("过期" in w for w in warns), f"误报过期: {warns}"
+
+    def test_no_unexpected_warnings_for_fresh_setup(self, tmp_path):
+        """健康配置下 warnings 应为空 —— 有告警框就该有真问题
+
+        这条专门防"断言只查自己认识的那条告警"这个坑: 与其逐条列举不该出现的
+        文案, 不如在**一切正常**时要求整个列表为空。
+        """
+        s = make_scheduler(tmp_path, holidays=["2099-10-01"])
+        s.set_runner(lambda a, d: {"status": "ok", "persisted": True})
+        s.set_alerter(lambda m: None, description="test")
+        register(s)
+        assert s.status("default")["warnings"] == [], s.status("default")["warnings"]
+
+
+class TestCommittedHolidayCalendar:
+    """锁住**已提交**的 data/paper/holidays.json
+
+    为什么要锁数据文件本身: 这份表是"节假日不触发"的唯一依据, 手改错了
+    (比如把真实交易日写进去)会导致**该跑的那天不跑**, 而且不会有任何报错。
+    """
+
+    @staticmethod
+    def _days() -> list[str]:
+        path = REPO_ROOT / "data" / "paper" / "holidays.json"
+        assert path.is_file(), f"缺少 {path}（跑 experiments/generate_holidays.py 生成）"
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def test_well_formed(self):
+        days = self._days()
+        assert days, "节假日表为空 —— 等于没有"
+        assert len(days) == len(set(days)), "有重复日期"
+        assert days == sorted(days), "未按日期排序(人工核对与 diff 都会更难)"
+        for d in days:
+            date.fromisoformat(d)  # 格式非法会抛
+        assert 10 <= len(days) <= 30, f"A 股一年节假日数量应在 10~30, 实际 {len(days)}"
+
+    def test_no_weekend_in_table(self):
+        """周末已由 is_trading_day 结构性排除, 表里出现周末说明数据有问题"""
+        bad = [d for d in self._days() if date.fromisoformat(d).weekday() >= 5]
+        assert not bad, f"节假日表里混入了周末: {bad}"
+
+    def test_single_year_coverage(self):
+        """本表按年生成 —— 混入多年说明生成脚本被改坏了"""
+        years = {d[:4] for d in self._days()}
+        assert len(years) == 1, f"节假日表覆盖多个年份: {sorted(years)}"
+
+    def test_real_holiday_is_excluded(self):
+        """行为断言: 表里的日期确实会被 is_trading_day 排除"""
+        days = self._days()
+        assert is_trading_day(date.fromisoformat(days[0]), set(days)) is False
+        # 同期一个普通工作日必须仍是交易日 —— 防止"整年都被标成假日"
+        probe = date.fromisoformat(days[0])
+        while probe.isoformat() in set(days) or probe.weekday() >= 5:
+            probe += timedelta(days=1)
+        assert is_trading_day(probe, set(days)) is True
+
+    # 黄金点: 已用**两个独立数据源**(baostock / akshare)逐点核对过
+    # (2026-10-10 核对: 两边对每个日期的开/休市判断与下表完全一致)。
+    # 完整核对靠 generate_holidays.py 的 cross_check(需要网络), CI 里跑不了,
+    # 所以这里钉住若干真实日期 —— 手改表、或把真实交易日误写进来时会立刻红。
+    GOLDEN_TRADING_DAYS = (
+        "2026-01-05",  # 2026 首个交易日
+        "2026-02-24",  # 春节假期后首个交易日(2/23 仍休市)
+        "2026-10-08",  # 国庆假期后首个交易日
+        "2026-10-09",  # 节后周五
+    )
+    GOLDEN_HOLIDAYS = (
+        "2026-01-01",  # 元旦
+        "2026-02-17",  # 春节
+        "2026-06-19",  # 端午
+        "2026-10-01",  # 国庆
+    )
+
+    def test_golden_spot_check(self):
+        """真实交易日**不得**出现在假日表里 —— 那会让该跑的那天静默不跑
+
+        这是本文件里唯一能抓"数据本身错了"的锁: 格式校验与行为断言都放它过去。
+        """
+        table = set(self._days())
+        wrong = [d for d in self.GOLDEN_TRADING_DAYS if d in table]
+        assert not wrong, f"这些是真实交易日, 却被写进了假日表: {wrong}"
+
+        missing = [d for d in self.GOLDEN_HOLIDAYS if d not in table]
+        assert not missing, f"这些是真实休市日, 却不在假日表里: {missing}"
+
+
+class TestHolidayGeneratorFailClosed:
+    """生成器最关键的安全属性: 两个源不一致时**拒绝写盘**
+
+    把真实交易日误标为假日比"没有日历"更糟 —— 后者每天照跑、由引擎兜底,
+    前者会让该跑的那天静默不跑。故这条必须上锁。
+    """
+
+    @staticmethod
+    def _module():
+        import importlib.util
+
+        path = REPO_ROOT / "experiments" / "generate_holidays.py"
+        assert path.is_file(), f"缺少生成脚本 {path}"
+        spec = importlib.util.spec_from_file_location("_gen_holidays", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_module_import_has_no_side_effects(self):
+        """导入本模块不能改动全局告警设置 —— 否则会污染整个测试会话"""
+        import warnings as w
+
+        before = w.filters[:]
+        self._module()
+        assert w.filters == before, "生成脚本在模块级改动了 warnings 过滤器"
+
+    def test_disagreement_refuses_to_write(self):
+        mod = self._module()
+        with pytest.raises(RuntimeError) as e:
+            mod.cross_check(2026, {"2026-01-05"}, {"2026-01-06"})
+        msg = str(e.value)
+        assert "拒绝生成" in msg
+        assert "2026-01-05" in msg and "2026-01-06" in msg, "差异必须列出来才能人工核对"
+
+    def test_agreement_passes(self):
+        mod = self._module()
+        mod.cross_check(2026, {"2026-01-05", "2026-01-06"}, {"2026-01-05", "2026-01-06"})
+
+    def test_blocks_groups_consecutive_days(self):
+        """连续日期要合成区间, 否则输出几十行没法人工核对"""
+        mod = self._module()
+        assert mod.blocks([date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 5)]) == [
+            "2026-10-01 ~ 2026-10-02",
+            "2026-10-05",
+        ]
+        assert mod.blocks([]) == []
 
 
 # ==================== 任务体行为(失败不静默) ====================

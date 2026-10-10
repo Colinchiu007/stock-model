@@ -215,7 +215,7 @@ T+1日:   以 df[T+1].open 撮合 → 成交记录 → 持仓更新
 | 依赖 | `apscheduler>=3.10`（可选依赖 `[schedule]`），未安装时接口返回 **503** |
 | 默认时间 | 每交易日 **15:30**（A 股 15:00 收盘后 30 分钟）推进 1 个交易日 |
 | 周末 | 由 cron `day_of_week=mon-fri` **结构性排除**，不依赖任务内判断 |
-| 节假日 | 可选 `data/paper/holidays.json`（`["2026-10-01", ...]`）；未提供时仅排除周末，且 `GET /api/paper/schedule` 会返回 `holiday_calendar=false` 并给出 warning |
+| 节假日 | `data/paper/holidays.json`（**已随仓库提供 2026 年表**）<br>生成方式：`experiments/generate_holidays.py` 取 **baostock + akshare 两个独立源**的交易日历并**逐日比对**，不一致则拒绝写盘（fail-closed）<br>跨年后失效 → status 给出「已过期」warning 提醒重新生成 |
 | 重入 | `max_instances=1` + `coalesce=True`：上一轮没跑完就跳过本轮；休眠错过只补跑一次 |
 | 失败可见 | 成功 / 失败 / 跳过都写入可查询的 status（`run_count` / `error_count` / `skipped_count` / `consecutive_failures` / `last_error`），异常同时进日志 |
 | 落盘失败 | 「跑成功但没存下来」按**失败**处理（否则会出现"每天都在跑、账却不动"） |
@@ -289,7 +289,7 @@ src/stock_model/paper/
 预留 `store.py` 接口便于日后换 SQLite。
 
 运行时文件（账户快照 / 定时配置 / 临时文件）**不进版本库**：
-`.gitignore` 忽略 `data/paper/*`，仅放行人工维护的 `holidays.json`。
+`.gitignore` 忽略 `data/paper/*`，仅放行**脚本生成**的 `holidays.json`（由两个独立数据源交叉验证，不手写）。
 
 ---
 

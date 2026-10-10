@@ -94,7 +94,7 @@ stock-model/
 │       ├── logger.py          # 日志 (loguru)
 │       └── helpers.py         # 辅助函数
 ├── examples/                  # 示例脚本
-├── tests/                     # 测试 (800个)
+├── tests/                     # 测试 (821个)
 ├── docs/                      # 架构/PRD/复盘文档
 ├── .github/workflows/         # CI/CD (GitHub Actions)
 └── pyproject.toml             # 项目配置
@@ -331,8 +331,16 @@ curl localhost:8000/api/paper/schedule    # 查状态（run/error/skipped + 最�
 
 - **重启不丢状态**：账户与**推进游标**一起原子落盘到 `data/paper/{account_id}.json`，
   进程重启后恢复。只恢复账户不恢复游标会导致重启后在已交易过的日期上再交易一遍。
-- **交易日**：cron 只在周一~周五触发；节假日可放 `data/paper/holidays.json`
-  （未提供时只排除周末，接口会返回 `holiday_calendar=false` 提示）。
+- **交易日**：cron 只在周一~周五触发；节假日用 `data/paper/holidays.json`
+  （**仓库已带 2026 年表**，由两个独立数据源交叉验证生成，见下）。
+  跨年后本表失效，管理接口会返回 `holiday_calendar` 与一条 `已过期` warning 提醒重新生成：
+
+  ```bash
+  python experiments/generate_holidays.py        # 默认生成当前年
+  ```
+  生成器会同时向 **baostock** 与 **akshare** 取交易日历并**逐日比对**，
+  **不一致就拒绝写盘** —— 把真实交易日误标成假日会导致"该跑的那天不跑"，
+  比没有日历更糟。
 - **失败不静默**：每轮的成败/跳过都写进可查询的状态，异常进日志；
   「跑成功但没落盘」按失败处理。
 - **失败主动通知**：连续失败会推送到你配的通道（控制台 / 文件 / 钉钉·飞书·企业微信
@@ -408,7 +416,7 @@ pytest tests/test_bug_regressions.py -v     # 缺陷回归保护
 pytest tests/test_parquet_fallback.py -v    # 缺可选依赖的降级路径
 ```
 
-当前共 **800** 个测试（**本地实测**：799 passed + 1 skipped）、覆盖率 **85%**（**本地实测**）。
+当前共 **821** 个测试（**本地实测**：820 passed + 1 skipped）、覆盖率 **85%**（**本地实测**）。
 
 > 📌 **本项目的规矩：文档里加粗的数字必须标来源**（写「本地实测」或「CI 实测」）。
 > 不要写一个裸数字。历史上有**三次**错数字，根因全是同一个 ——

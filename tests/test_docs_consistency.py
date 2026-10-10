@@ -70,6 +70,40 @@ class TestReadmeTestCount:
         )
 
 
+class TestTextFileLineEndings:
+    """行尾不得被整文件改写
+
+    为什么值得上锁：本项目**已踩过两次**同款 —— Windows 上 Python 的
+    ``Path.write_text()`` 与 PowerShell 的 ``Set-Content`` 都会把 ``\\n`` 写成 ``\\r\\n``。
+    后果不是"程序坏了"，而是**一次小改造成几百行的全文件 diff**：
+    真实改动被淹没，review 直接失效（最近一次：``docs/HANDOVER.md`` 582 行全文重写）。
+
+    名单只覆盖**当前已经是 LF** 的文件（它们最常被脚本改写）。
+    ``phase2_architecture.md`` / ``phase3_prd.md`` 目前是 CRLF —— 属既有约定，
+    留给后续一次单独的"只改行尾、不改内容"的规范化，不在这里强行改。
+    """
+
+    LF_ONLY = (
+        "docs/HANDOVER.md",
+        "docs/phase4_prd_paper_trading.md",
+        "docs/bug-reflection-2026-10-06.md",
+        "docs/bug-reflection-2026-10-10.md",
+        "docs/strategy-evaluation-2026-10-07.md",
+        "src/stock_model/paper/scheduler.py",
+        "data/paper/holidays.json",
+        "experiments/generate_holidays.py",
+    )
+
+    @pytest.mark.parametrize("rel", LF_ONLY)
+    def test_stays_lf(self, rel):
+        raw = (REPO_ROOT / rel).read_bytes()
+        crlf = raw.count(b"\r\n")
+        assert crlf == 0, (
+            f"{rel} 出现 {crlf} 处 CRLF —— 行尾被整文件改写了。"
+            f"改文件时用 newline='' (Python)，别用 Set-Content (PowerShell)"
+        )
+
+
 class TestDocNumbersDeclareProvenance:
     """环境相关数字必须标来源 —— 这是一条**机制**，不是一次性的修正
 
