@@ -70,6 +70,72 @@ class TestReadmeTestCount:
         )
 
 
+class TestDocNumbersDeclareProvenance:
+    """环境相关数字必须标来源 —— 这是一条**机制**，不是一次性的修正
+
+    为什么需要（三次真实事故，根因完全相同）
+    ----------------------------------------
+    1. README 写 `591` 个测试（实际 700+）
+    2. README 写 `覆盖率 81%`（实际 85%）
+    3. 用 `PYTHONPATH` stub 模拟 CI 主 job 得到 `674 passed / 28 skipped` 并写进文档
+       （真实 CI 是 `666 passed / 36 skipped`）
+
+    三次都是**数字没写来源，后来被当成权威**。尤其第 3 次：那个数字来自一个
+    **根本不是 CI 的环境**，却因为长得像实测结果而被采信。
+
+    机制
+    ----
+    凡"随环境变化的数字"，**其所在那一行**必须出现来源标记（本地 / CI / 实测）。
+    这样后来的人一眼能看出这个数是"谁在哪个环境量的"，而不会再把它串到别的环境上。
+
+    为什么是"同一行"而不是"邻近几行"：一开始写的是 ±2 行，随即发现**旁边那段
+    解释文字本身就在说「写 本地实测 或 CI 实测」** —— 那段说明会替一个裸数字
+    满足检查。而"裸数字旁边恰好有『CI』这个词"正是历史事故的形态，所以必须收紧。
+
+    适用范围刻意收窄：**只查被加粗的环境相关数字**（测试总数 / 覆盖率 / passed-skipped）。
+    "新增了 N 个测试"这类是历史事实、不随环境变化，要求标来源只是噪音。
+    """
+
+    # 只有"随环境变化"的声明才需要来源
+    ENV_DEPENDENT_PATTERNS = (
+        r"当前共\s*\*\*\d+\*\*\s*个测试",
+        r"覆盖率\s*\*\*\d+\s*%",
+        r"\*\*\d+\s*passed[,，]\s*\d+\s*skipped\*\*",
+    )
+    PROVENANCE_MARKERS = ("本地", "CI", "实测")
+
+    DOCS = ("README.md", "docs/HANDOVER.md")
+
+    @pytest.mark.parametrize("rel", DOCS)
+    def test_env_dependent_numbers_declare_provenance(self, rel):
+        path = REPO_ROOT / rel
+        assert path.is_file(), f"文档不存在: {rel}"
+        lines = path.read_text(encoding="utf-8").splitlines()
+
+        offenders = []
+        for i, line in enumerate(lines):
+            if not any(re.search(p, line) for p in self.ENV_DEPENDENT_PATTERNS):
+                continue
+            # 必须**同一行**写出处: 邻近几行里的说明文字会替裸数字满足检查
+            if not any(m in line for m in self.PROVENANCE_MARKERS):
+                offenders.append(f"{rel}:{i + 1}: {line.strip()[:90]}")
+
+        assert not offenders, (
+            "以下环境相关数字没标来源（本地/CI/实测）—— 本项目已因此写错三次"
+            "（591 / 覆盖率81% / stub 模拟的 674+28）：\n  " + "\n  ".join(offenders)
+        )
+
+    def test_source_markers_are_not_vacuous(self):
+        """反向确认: 标记必须真的出现在数字附近, 而不是文件里到处都有
+
+        若哪天有人把 "本地" 加进不相干段落来"骗过"上面那条, 这条会指向具体位置,
+        提醒这条规矩的本意是**标出处**而不是凑关键词。
+        """
+        text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        for marker in self.PROVENANCE_MARKERS:
+            assert marker in text, f"README 缺少来源标记写法示例: {marker}"
+
+
 class TestReadmeArchitectureTree:
     """README 架构树必须覆盖实际存在的顶层模块目录"""
 
