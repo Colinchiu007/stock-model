@@ -213,13 +213,36 @@ def run_paper_cycle(account_id: str, days: int) -> dict[str, Any]:
         }
 
 
-def _scheduler() -> Any:
-    """取调度器单例并确保它调用本模块的执行体"""
+def configure_paper_scheduler() -> Any:
+    """装配模拟盘调度器：执行体 + **告警通道**
+
+    app 启动恢复与 API 首次使用共用这一个入口。刻意只有一个入口 ——
+    两处各配一半(比如启动时漏了告警)会让「失败主动提醒」在某些路径上静默失效，
+    而这类"某条路径上没生效"正是本项目反复踩的坑。
+
+    告警通道来自 ``STOCK_NOTIFY_*`` 配置(见 ``.env.example``)：默认只有控制台，
+    配了 webhook 就能推到钉钉/飞书/企业微信。
+    """
+    from stock_model.config.settings import get_settings
+    from stock_model.notify import build_alert_notifier
     from stock_model.paper.scheduler import get_scheduler
 
     sched = get_scheduler()
     sched.set_runner(run_paper_cycle)
+
+    cfg = get_settings().notify
+    notifier = build_alert_notifier(cfg)
+    sched.set_alerter(
+        notifier.notify_message,
+        description=notifier.description,
+        every_n_failures=cfg.alert_every_n_failures,
+    )
     return sched
+
+
+def _scheduler() -> Any:
+    """取调度器单例(已装配好执行体与告警通道)"""
+    return configure_paper_scheduler()
 
 
 def register_paper_routes(app: Any) -> None:

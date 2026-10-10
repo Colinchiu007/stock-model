@@ -5,17 +5,13 @@
 > **仓库**：`Colinchiu007/stock-model`（A股量化分析工具）
 > **文档性质**：接手前必读。读完能明白「做了什么、为什么这么做、接下来该做什么」。
 
-> **测试基线说明**（本地 + CI 实测；**mypy 一律以 CI 为准**）
-> - 本地：**760 passed, 1 skipped**（共 761）
-> - CI `Test (3.10 / 3.11 / 3.12)`：**678 passed, 36 skipped, 0 失败**
-> - CI `Test Optional Dependencies`：**752 passed, 9 skipped**（收集总数 761，与本地一致）
-> - CI `Lint`：**`mypy src/stock_model` → Success, no issues found in 57 source files**
+> **测试基线说明**（本地实测；**mypy 与精确明细一律以 CI 为准**）
+> - 本地：**786 passed, 1 skipped**（共 787）；覆盖率 **85%**
+> - `mypy src/stock_model`：**Success, 0 errors**
 >   （2026-10-10 之前是 86 errors —— 因为 CI 装了 mypy 却从不执行它）
-> - 覆盖率：**85%**
-> - 本轮新增 20 个测试：质量门禁锁 8 / 组合优化分派与守卫 8 / 其它 4
-> - PR #19 的增量：`test_paper_store.py` 那条 skip 改为真断言 + 59 个持久化与调度测试
-> - ⚠️ **不要拿一个环境的数字去改另一个环境的文档**：缺 fastapi 时 `test_web_app.py`
->   整体算一个 skip 条目，各 job 的收集总数本就不同
+> - ⚠️ **不要把逐 job 明细抄进文档**：缺 fastapi 时 `test_web_app.py` 整体算一个
+>   skip 条目，各 job 收集总数本就不同，且每加一个测试明细就会过期 ——
+>   README 历史上那两处错数字（`591`、`覆盖率 81%`）就是这么来的
 > - 状态：**无未合并 PR**
 
 ---
@@ -108,6 +104,40 @@
 > **为什么值得记进交接文档**：A 是「装了/配了但不跑」，B 是「返回成功但结果是错的」——
 > 两者都是本项目 15 个历史缺陷的同款形态。README 里那句 `覆盖率 81%` 也是同一类
 > （实际 85%，已修正）。
+
+### 2.5 失败告警：让「跑了但没人知道」闭环（2026-10-10，原 TD-08）
+
+定时运行的最后一块不是"每天自动跑"，而是"**跑挂了会有人知道**"。
+没告警的自动化只做了一半：`last_error` 摆在那儿，但没人会天天去看。
+
+| 项 | 实现 |
+|---|---|
+| 通道 | **复用 `notify/`**，不另起传输。为此把 `NotificationChannel.send` 的 `result` 参数改成可选（系统告警传 `None`）—— 通道接口原本硬绑 `StrategyResult`，告警没有信号对象 |
+| 装配 | `notify.build_alert_notifier()` 按 `STOCK_NOTIFY_*` 配置组装（控制台默认开 / 文件 / Webhook） |
+| 注入 | `PaperScheduler.set_alerter(fn, description=..., every_n_failures=...)`。调度器**不认识 notify 模块**，只知道"失败就叫一下这个函数"——可单测，也无 paper→notify 硬依赖 |
+| 节流 | 首次失败必发；之后每 N 次（默认 3）再发一次；**失败→恢复也发一条** |
+| 隔离 | 告警通道抛异常**不影响调度**（否则"通知挂了"会升级成"定时任务挂了"），但原因写进 `last_alert_error` + status warning，不静默 |
+| 可见性 | status 回显 `alert_channel`（Webhook **只显示主机名**，URL 含 token 属凭据）、`alert_count`、`last_alert_at`、`last_alert_error`；未接通道时给 warning |
+
+**为什么不"一失败就发"**：连着一周每天都失败会刷屏，人会把通知静音 —— 那才是真正的
+"失败被静默"。节流同时保留升级趋势（消息里带累计次数）。
+
+**顺带修的既有漏捕**：`WebhookChannel.send` 原来只捕 `(OSError, RuntimeError, TimeoutError)`，
+而 httpx 的 `ConnectError` 继承自 `HTTPError` **不是** `OSError` ——
+于是"webhook 不可达"会穿透给调用方。已补 `httpx.HTTPError` 并加测试
+（端口 1 连不上，不需要网络）。同类漏捕本项目已栽过一次（`tenacity.RetryError`）。
+
+**配置**（见 `.env.example`，无需改代码）：
+
+```bash
+STOCK_NOTIFY_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=xxx
+STOCK_NOTIFY_CONSOLE=true
+# STOCK_NOTIFY_FILE_PATH=data/paper/alerts.jsonl
+# STOCK_NOTIFY_ALERT_EVERY_N_FAILURES=3   # 0 = 只提醒首次
+```
+
+新增 25 个测试（`tests/test_paper_alerts.py`），**4 次变异验证全部确认会红**
+（节流 / 告警隔离 / 恢复通知 / webhook 异常各一次）。
 
 ---
 
@@ -266,7 +296,8 @@ curl -X DELETE localhost:8000/api/paper/schedule
 | TD-05 | Web Dashboard 用户认证 | P4 待办 |
 | TD-06 | 实时行情 WebSocket | P4 待办 |
 | TD-07 | Docker 化部署 | P4 待办 |
-| TD-08 | **定时失败没有通知渠道** | 出问题只会进日志与 `GET /api/paper/schedule` 的 `last_error`。项目已有 `notify/`（控制台/文件/Webhook 通道），可复用 |
+| TD-08 | ~~定时失败没有通知渠道~~ | ✅ **2026-10-10 已完成**：复用 `notify/` 通道（控制台/文件/Webhook），配 `STOCK_NOTIFY_WEBHOOK_URL` 即可；首次失败必发、之后每 3 次、恢复时也发一条 |
+| TD-09 | 前端没有**定时状态卡** | 状态只能通过 `GET /api/paper/schedule` 看；Tab 上既无开关也无「下次几点跑 / 上次成功没」 |
 
 ---
 

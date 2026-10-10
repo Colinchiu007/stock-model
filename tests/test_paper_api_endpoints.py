@@ -175,6 +175,21 @@ class TestScheduleEndpoints:
             is False
         )
 
+    def test_status_exposes_alert_channel(self, client):
+        """HTTP 层必须回显告警通道 —— 否则用户以为"失败会通知我"
+
+        这条同时验证装配路径: ``create_app`` 与端点都走
+        ``configure_paper_scheduler()``, 漏配任何一处都会让告警在某条路径上静默失效。
+        不断言具体通道名(取决于开发者本地 .env), 只要求字段在场且非空。
+        """
+        pytest.importorskip("apscheduler")
+        client.post("/api/paper/schedule", json={"account_id": "acc", "hour": 15, "minute": 30})
+
+        status = client.get("/api/paper/schedule", params={"account_id": "acc"}).json()
+        assert status["alert_channel"], "status 必须回显告警通道(或'未接入')"
+        for key in ("alert_count", "last_alert_at", "last_alert_error"):
+            assert key in status, f"status 缺少告警字段 {key}"
+
     def test_missing_dependency_returns_503(self, client):
         """缺 apscheduler 必须返回 503, 不能 200 + 一个错误字段
 

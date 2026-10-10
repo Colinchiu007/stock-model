@@ -94,7 +94,7 @@ stock-model/
 │       ├── logger.py          # 日志 (loguru)
 │       └── helpers.py         # 辅助函数
 ├── examples/                  # 示例脚本
-├── tests/                     # 测试 (761个)
+├── tests/                     # 测试 (787个)
 ├── docs/                      # 架构/PRD/复盘文档
 ├── .github/workflows/         # CI/CD (GitHub Actions)
 └── pyproject.toml             # 项目配置
@@ -335,6 +335,21 @@ curl localhost:8000/api/paper/schedule    # 查状态（run/error/skipped + 最�
   （未提供时只排除周末，接口会返回 `holiday_calendar=false` 提示）。
 - **失败不静默**：每轮的成败/跳过都写进可查询的状态，异常进日志；
   「跑成功但没落盘」按失败处理。
+- **失败主动通知**：连续失败会推送到你配的通道（控制台 / 文件 / 钉钉·飞书·企业微信
+  Webhook），失败→恢复也发一条。首次失败必发，之后每 3 次再提醒一次（可调），
+  避免刷屏导致通知被静音 —— 那才是真正的"失败被静默"。
+  在 `.env` 里配置即可，无需改代码：
+
+  ```bash
+  STOCK_NOTIFY_WEBHOOK_URL=https://oapi.dingtalk.com/robot/send?access_token=xxx
+  STOCK_NOTIFY_CONSOLE=true
+  # STOCK_NOTIFY_FILE_PATH=data/paper/alerts.jsonl
+  # STOCK_NOTIFY_ALERT_EVERY_N_FAILURES=3   # 0 = 只提醒首次
+  ```
+
+  `GET /api/paper/schedule` 会回显 `alert_channel`（**只显示 webhook 主机名，
+  不回显带 token 的完整 URL**）与 `alert_count` / `last_alert_error`；
+  没接通道时会给出 warning，不会让你误以为"失败会通知我"。
 - 端到端验证（真起服务 → 强杀 → 重启 → 比对）：`pwsh -File experiments/verify_paper_restart.ps1`
 - 详细设计见 [`docs/phase4_prd_paper_trading.md`](docs/phase4_prd_paper_trading.md)，
   交接与踩坑记录见 [`docs/HANDOVER.md`](docs/HANDOVER.md)。
@@ -393,17 +408,15 @@ pytest tests/test_bug_regressions.py -v     # 缺陷回归保护
 pytest tests/test_parquet_fallback.py -v    # 缺可选依赖的降级路径
 ```
 
-当前共 **761** 个测试（本地装齐可选依赖：760 passed + 1 skipped）。
-各 job 环境不同、数字本就不同 —— 下表为 **CI 实测**：
+当前共 **787** 个测试（本地装齐可选依赖：786 passed + 1 skipped），覆盖率 **85%**。
 
-| Job | 结果 |
-|-----|------|
-| Test（Python 3.10 / 3.11 / 3.12） | 678 passed, 36 skipped, **0 失败** |
-| Test Optional Dependencies（装齐 `[dev,quant,schedule,web,ta]`） | 752 passed, 9 skipped |
-| Lint（含 `mypy src/stock_model`） | **Success: no issues found in 57 source files** |
-
-覆盖率 **85%**。各 job 的**收集总数本就不同**（缺 fastapi 时整个 `test_web_app.py`
-作为一个 skip 条目），这是环境差异、不是文档该对齐的数字。
+> **为什么这里只有一个数字、不列各 job 明细**：各 job 的收集总数本就不同
+> （缺 fastapi 时整个 `test_web_app.py` 作为一个 skip 条目），而且每加一个测试
+> 明细就会过期 —— 本项目 README 曾因此留下 `591`（实际 700+）和 `覆盖率 81%`
+> （实际 85%）两个错数字。**精确明细以 CI 运行结果为准**，别再抄进文档。
+>
+> 加测试后请同步改这个数字与架构树里的 `测试 (N个)`（`test_docs_consistency`
+> 会校验两处一致，否则 CI 会红）。
 
 > **关于跳过的测试**：skip 均为「可选依赖未安装」类
 > （如 pyarrow / pandas-ta / ta-lib / fastapi / apscheduler 未装时相关用例跳过）。
