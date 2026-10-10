@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import asdict, dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -43,6 +43,10 @@ DEFAULT_HOLIDAY_FILE = DEFAULT_STORE_DIR / "holidays.json"
 
 # A 股 15:00 收盘。当日 K 线要等收盘后才完整, 故默认收盘后 30 分钟执行。
 MARKET_CLOSE_HOUR = 15
+# 心跳过期阈值(天): 距上次任何活动(成功/失败/跳过)超过这个天数,
+# status 给出"可能根本没在跑"的提示。刻意宽松 —— 周五到下周一隔 3 天、
+# 长假隔 5 天都属正常; 心跳检测最怕误报, 误报的下一步就是被人静音。
+HEARTBEAT_STALE_DAYS = 7
 DEFAULT_HOUR = 15
 DEFAULT_MINUTE = 30
 DEFAULT_TIMEZONE = "Asia/Shanghai"
@@ -349,6 +353,9 @@ class PaperScheduler:
             )
         if state.consecutive_failures >= 2:
             warns.append(f"已连续失败 {state.consecutive_failures} 次, 请查看 last_error")
+        heartbeat = self._heartbeat_message(state)
+        if heartbeat:
+            warns.append(heartbeat)
         if self._alerter is None:
             # 这条很重要: 定时任务失败了却没人知道, 等于"自动化"只做了一半
             warns.append(
@@ -358,6 +365,50 @@ class PaperScheduler:
         if state.last_alert_error:
             warns.append(f"上一条告警发送失败: {state.last_alert_error}")
         return warns
+
+    def _heartbeat_message(self, state: ScheduleState) -> str:
+        """距上次**任何活动**超过阈值 → 提示"可能根本没在跑"
+
+        为什么需要这条：告警只能证明"进程活着时出过错"，**证明不了"进程还活着"**。
+        服务被停、机器关机 —— 这些都不会产生失败记录，`error_count` 不会涨，
+        唯一会变旧的是 ``last_run_at``。没有人会天天去看这个字段，
+        所以在 status/界面上显式说出来。
+
+        为什么成功/失败/**跳过**都算活动：三条路径都会写 ``last_run_at``，
+        "跳过"同样证明调度器活着并在判断交易日。
+
+        **诚实边界**：这条提示只在"有人来查"时才可能出现 —— 进程死了不会有
+        任何东西主动推送。要做到"死了也通知"，需要进程外的 watchdog（独立待办）。
+
+        阈值刻意宽松（工作日 7 天而不是 1~3 天）：周五跑到下周一隔 3 天是**正常**的，
+        遇上长假隔 5 天也正常 —— 心跳检测**最怕误报**，误报的下一步就是被人静音。
+        """
+        if not state.last_run_at:
+            return ""  # 从未跑过: 刚开启属正常
+        try:
+            last = datetime.fromisoformat(state.last_run_at)
+        except ValueError:
+            return ""  # 坏时间戳不在这里报 —— 不能让一个坏字段把 status 弄挂
+        if last.tzinfo is None:
+            # 旧版本持久化的 naive 时间戳: 按任务自己的时区补齐再比较
+            last = last.replace(tzinfo=self._resolve_timezone(state.timezone))
+        now = self._now(state.timezone)
+        if state.trigger_type == "interval":
+            threshold = timedelta(minutes=max(3 * (state.interval_minutes or 1), 10))
+        else:
+            threshold = timedelta(days=HEARTBEAT_STALE_DAYS)
+        gap = now - last
+        if gap <= threshold:
+            return ""
+
+        total_minutes = int(gap.total_seconds() // 60)
+        days, minutes = divmod(total_minutes, 24 * 60)
+        human = f"{days} 天 {minutes} 分钟" if days else f"{total_minutes} 分钟"
+        return (
+            f"距上次执行已 {human}, 远超预期({threshold.days} 天内) —— "
+            f"服务可能根本没在跑(进程被停/机器关机**不会**产生失败记录)。"
+            f"上次活动: {state.last_run_at}"
+        )
 
     def _holiday_table_expired(self, state: ScheduleState) -> bool:
         """节假日表是否已不覆盖"今年"
