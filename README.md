@@ -94,7 +94,7 @@ stock-model/
 │       ├── logger.py          # 日志 (loguru)
 │       └── helpers.py         # 辅助函数
 ├── examples/                  # 示例脚本
-├── tests/                     # 测试 (797个)
+├── tests/                     # 测试 (800个)
 ├── docs/                      # 架构/PRD/复盘文档
 ├── .github/workflows/         # CI/CD (GitHub Actions)
 └── pyproject.toml             # 项目配置
@@ -408,12 +408,18 @@ pytest tests/test_bug_regressions.py -v     # 缺陷回归保护
 pytest tests/test_parquet_fallback.py -v    # 缺可选依赖的降级路径
 ```
 
-当前共 **797** 个测试（本地装齐可选依赖：796 passed + 1 skipped），覆盖率 **85%**。
+当前共 **800** 个测试（**本地实测**：799 passed + 1 skipped）、覆盖率 **85%**（**本地实测**）。
+
+> 📌 **本项目的规矩：文档里加粗的数字必须标来源**（写「本地实测」或「CI 实测」）。
+> 不要写一个裸数字。历史上有**三次**错数字，根因全是同一个 ——
+> 数字没写来源，后来被当成权威：`591` 个测试（实际 700+）、`覆盖率 81%`
+> （实际 85%）、以及用 `PYTHONPATH` stub 模拟 CI 得到的 `674 passed / 28 skipped`
+> （真实 CI 是 666 / 36）。
+> `test_docs_consistency.TestDocNumbersDeclareProvenance` 会校验这一点。
 
 > **为什么这里只有一个数字、不列各 job 明细**：各 job 的收集总数本就不同
 > （缺 fastapi 时整个 `test_web_app.py` 作为一个 skip 条目），而且每加一个测试
-> 明细就会过期 —— 本项目 README 曾因此留下 `591`（实际 700+）和 `覆盖率 81%`
-> （实际 85%）两个错数字。**精确明细以 CI 运行结果为准**，别再抄进文档。
+> 明细就会过期。**精确明细以 CI 运行结果为准**，别再抄进文档。
 >
 > 加测试后请同步改这个数字与架构树里的 `测试 (N个)`（`test_docs_consistency`
 > 会校验两处一致，否则 CI 会红）。
