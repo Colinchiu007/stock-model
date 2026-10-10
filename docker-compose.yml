@@ -1,0 +1,48 @@
+# 模拟盘部署：服务 + 每日兜底，两个容器共用一个数据卷
+#
+#   docker compose up -d --build
+#   docker compose logs -f app
+#   兜底日志: docker compose logs -f fallback
+#
+# 设计说明(为什么两个容器而不是 cron 进容器):
+#   - 兜底脚本是**进程外**保障(服务死了它照样跑) —— 放同一容器里用 sleep 循环
+#     仍满足, 但分离后 app 崩溃重启不影响兜底的节拍, 且资源互不干扰
+#   - 共用 ./data 卷: 兜底走 HTTP 调 app, 状态落盘在同一卷上
+#
+# 停止: docker compose down (数据卷 ./data 保留)
+
+services:
+  app:
+    build:
+      context: .
+      # 中国网络可打开:
+      # args:
+      #   PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+    container_name: stock-model-app
+    ports:
+      - "8123:8000"        # 宿主 8123 → 容器 8000(避开宿主 8000 被 everos 占用)
+    environment:
+      TZ: Asia/Shanghai
+      # STOCK_NOTIFY_WEBHOOK_URL: https://oapi.dingtalk.com/robot/send?access_token=xxx
+      # STOCK_PING_URL: https://hc-ping.com/xxxx
+    volumes:
+      - ./data:/app/data   # 账户状态/节假日表 持久化
+    restart: unless-stopped
+
+  fallback:
+    build:
+      context: .
+    container_name: stock-model-fallback
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      TZ: Asia/Shanghai
+      FALLBACK_BASE_URL: http://app:8000   # 容器网络内直连 app
+      # STOCK_PING_URL: https://hc-ping.com/xxxx
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    # 每天循环: 19:00 后执行一次当日兜底(幂等, 重复调也无害), 之后 sleep 到明天。
+    # $$ 是 compose 的字面 $ 转义; done 标记用日期命名, 容器重启也不重复执行。
+    entrypoint: ["/bin/sh", "/app/scripts/fallback_loop.sh"]

@@ -179,6 +179,55 @@ STOCK_NOTIFY_CONSOLE=true
 | 端口被占 | `Get-NetTCPConnection -LocalPort 8123` | 确认是不是本项目服务再处理；**8000 的 everos 不要动** |
 | 测试/文档数字对不上 | CI 运行结果 | 以 CI 为准，回填时标来源（§4-8） |
 
+## 7. Docker 部署（TD-07）
+
+> ⚠️ **验证状态（如实）**：`docker compose config` 语法/语义校验通过；
+> **容器构建与运行未验证** —— 撰写时本机 Docker 引擎未运行。
+> 首次使用请先跑一遍下面的验证步骤，把结果记回本节。
+
+```powershell
+# 构建并启动(app + fallback 两个容器)
+docker compose up -d --build
+docker compose ps                      # 两容器应 Up; app 应 (healthy)
+curl.exe http://127.0.0.1:8123/api/health   # {"status":"ok"}
+docker compose logs -f app             # 观察启动日志
+
+# 验证兜底(手动触发一次, 不等 19:00):
+docker compose exec fallback python /app/scripts/paper_daily_fallback.py
+# 预期: ✓ 服务已在运行 → 今日已处理/执行结果 → 退出 0
+
+# 验证幂等(再跑一次应秒退):
+docker compose exec fallback python /app/scripts/paper_daily_fallback.py
+```
+
+设计要点：
+- **两个容器**：`app`(uvicorn) + `fallback`(19:00 后执行每日兜底，共用 `./data` 卷)。
+  兜底是进程外保障，分离后 app 崩溃重启不影响兜底节拍
+- **单 worker 红线继承**：容器内 uvicorn 不加 `--workers`
+- **端口**：宿主 `8123` → 容器 `8000`（避开宿主 8000 被 everos 占用）
+- **时区**：`TZ=Asia/Shanghai`（A股调度依赖）
+- **数据**：`./data` 挂载到 `/app/data`，账户状态/节假日表持久化；
+  `docker compose down` 不丢数据
+- **死信开关**：`STOCK_PING_URL` 在两个容器都生效（app 内置调度失败时经 notify；
+  fallback 每日 ping 报平安）——见 §8
+- 中国网络：构建时打开 compose 里的 `PIP_INDEX_URL` 清华镜像注释
+
+## 8. 死信开关（TD-10 完整形态）
+
+前四层保障都跑在**这台机器上**——机器彻底关机/断网时全部失效。
+死信开关（healthchecks.io 模式）补上这块：
+
+1. 在 [healthchecks.io](https://healthchecks.io)（或自建）建一个 Check，拿到 ping URL
+2. `.env` 里配 `STOCK_PING_URL=https://hc-ping.com/xxxx`（见 `.env.example`）
+3. **Check 的周期设 1~2 天**（兜底每天 ping 一次，留宽余量防误报）
+4. 兜底脚本每次运行结束都会 ping：成功 ping 正常端点；**失败 ping `/fail`**（立即告警）
+5. 之后你若超过周期没收到 ping，**监控服务主动通知你** —— 与本机是否存活无关
+
+实现：`scripts/watchdog_ping.py`（ping 失败绝不影响兜底退出码，但打日志）。
+测试：`tests/test_watchdog_ping.py`（6 条）+ 接线测试（4 条）。
+
 ## 6. 变更记录
 
 - 2026-10-10：首版。覆盖 §1–§5 全部命令，均在本会话实测（来源见各节标注）。
+- 2026-10-10：新增 §7 Docker 部署（**容器构建未验证**，见节内说明）、§8 死信开关（§1 兜底已接入 ping，实测跳过路径）。
+- 2026-10-10：§6 预期测试数改为「以 CI 为准」。
