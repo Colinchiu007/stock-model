@@ -1,0 +1,20 @@
+# 不进镜像的内容(与 .gitignore 不同: 这是指镜像构建范围)
+.git
+.github
+.mypy_cache
+.pytest_cache
+.ruff_cache
+__pycache__
+*.pyc
+logs
+data/paper/*.json
+!data/paper/holidays.json
+data/raw
+data/processed
+data/cache
+docs
+tests
+.env
+_verify_output.txt
+_ui_shots
+_ui_server.log

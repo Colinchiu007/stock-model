@@ -20,6 +20,7 @@ HTTP 与进程拉起(`ensure_server`)不在这里测 —— 它们需要真实�
 from __future__ import annotations
 
 import importlib.util
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -32,7 +33,14 @@ TZ = ZoneInfo("Asia/Shanghai")
 
 @pytest.fixture(scope="module")
 def fb():
-    """加载 scripts/paper_daily_fallback.py(导入无副作用, 不起服务)"""
+    """加载 scripts/paper_daily_fallback.py(导入无副作用, 不起服务)
+
+    脚本 import 同目录的 watchdog_ping —— 真实执行时 sys.path[0] 是 scripts/,
+    测试里手动补上这个路径, 模拟与真实执行一致的环境。
+    """
+    scripts_dir = str(REPO_ROOT / "scripts")
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
     path = REPO_ROOT / "scripts" / "paper_daily_fallback.py"
     assert path.is_file(), f"缺少兜底脚本 {path}"
     spec = importlib.util.spec_from_file_location("_paper_daily_fallback", path)
@@ -86,6 +94,25 @@ class TestTodayHandled:
         """时钟回拨/别的机器写的未来时间: 日期是今天就算已处理, 不重复推进"""
         now = datetime.now(TZ)
         assert fb.today_handled(iso(now + timedelta(hours=3)), now) is True
+
+    def test_cross_midnight_run_counts(self, fb):
+        """**回归锁**（真 bug）: 21:17 的时间戳 +3h = 次日 00:17, 跨了午夜
+
+        字符串前缀比对(==)会判 False -> 兜底重复推进同一交易日。
+        正确语义: run_date **>=** today 即已处理(未来比"没有记录"更接近已处理,
+        重复撮合的风险大于漏跑)。本测试用固定的跨午夜组合, 不依赖当前时刻。
+        """
+        now = datetime(2026, 10, 10, 23, 0, tzinfo=TZ)
+        next_morning = datetime(2026, 10, 11, 0, 30, tzinfo=TZ)
+        assert fb.today_handled(iso(next_morning), now) is True
+        # 反向: 昨天的记录在"今天 23:00"仍不算已处理(今天还没跑)
+        yesterday = datetime(2026, 10, 9, 15, 30, tzinfo=TZ)
+        assert fb.today_handled(iso(yesterday), now) is False
+
+    def test_date_like_garbage_does_not_count(self, fb):
+        """形如日期但非法(2026-13-99)不算已处理 -> 走补跑(幂等拦重复)"""
+        now = datetime.now(TZ)
+        assert fb.today_handled("2026-13-99", now) is False
 
 
 # ==================== 执行结果 → 退出码 ====================
@@ -153,3 +180,60 @@ def test_import_has_no_side_effects():
 def test_default_port_is_not_8000(fb):
     """8000 被本机另一个常驻应用(everos)占用 —— 实测踩过, 不许回退"""
     assert fb.DEFAULT_PORT != 8000
+
+
+class TestPingWiring:
+    """main() 的两条退出路径都必须 ping 死信开关
+
+    为什么值得锁: "已处理"路径若不 ping, 长假多天不 ping 会被监控服务**误报**;
+    ping 若影响退出码, 监控挂了会把"账补上了"搞成"调度器以为失败"。
+    这里 mock 掉 HTTP 与 ping 本体, 只验证**接线**。
+    """
+
+    @staticmethod
+    def _run_main(monkeypatch, fb, *, already, run_status="ok"):
+        """跑 main(): mock 网络/环境, 返回 (退出码, ping 调用列表)"""
+        calls = []
+        sched = {
+            "running": True,
+            "last_run_at": iso(datetime.now(TZ)) if already else "",
+            "last_status": "skipped" if already else "",
+        }
+        monkeypatch.setattr(fb, "server_alive", lambda: True)
+        monkeypatch.setattr(
+            fb,
+            "http_json",
+            lambda path, method="GET", payload=None, timeout=30: (
+                sched if "schedule" in path and method == "GET" else {"status": run_status}
+            ),
+        )
+        monkeypatch.setattr(fb, "ping_quiet", lambda url, ok=True: calls.append((url, ok)))
+        monkeypatch.setenv("STOCK_PING_URL", "https://hc-ping.com/xyz")
+        return fb.main(), calls
+
+    def test_already_path_pings_ok(self, monkeypatch, fb):
+        code, calls = self._run_main(monkeypatch, fb, already=True)
+        assert code == 0
+        assert calls == [("https://hc-ping.com/xyz", True)], "已处理也必须报平安"
+
+    def test_run_path_pings_with_status(self, monkeypatch, fb):
+        code, calls = self._run_main(monkeypatch, fb, already=False, run_status="ok")
+        assert code == 0
+        assert calls == [("https://hc-ping.com/xyz", True)]
+
+    def test_run_error_pings_fail(self, monkeypatch, fb):
+        """失败要 ping /fail —— 让监控服务立即告警, 而不是等超时"""
+        code, calls = self._run_main(monkeypatch, fb, already=False, run_status="error")
+        assert code == 1
+        assert calls == [("https://hc-ping.com/xyz", False)]
+
+    def test_unconfigured_ping_still_exits_zero(self, monkeypatch, fb):
+        """没配 STOCK_PING_URL 时: 不 ping、退出码不受影响(兜底本身最重要)"""
+        sched = {"running": True, "last_run_at": iso(datetime.now(TZ)), "last_status": "ok"}
+        monkeypatch.setattr(fb, "server_alive", lambda: True)
+        monkeypatch.setattr(fb, "http_json", lambda *a, **k: sched)
+        monkeypatch.delenv("STOCK_PING_URL", raising=False)
+        monkeypatch.setattr(
+            fb, "ping_quiet", lambda url, ok=True: pytest.fail("未配置时不应尝试 ping")
+        )
+        assert fb.main() == 0

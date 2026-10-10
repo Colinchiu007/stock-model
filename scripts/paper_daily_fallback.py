@@ -36,9 +36,13 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import os
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+# 同目录导入: 脚本被外部调度器直接执行, 无包上下文, sys.path[0] 即本目录
+from watchdog_ping import ping_quiet
 
 REPO = Path(__file__).resolve().parents[1]
 # 不用 8000 这类常见默认端口: 实测本机 8000 被另一个常驻应用(everos)占用,
@@ -46,7 +50,9 @@ REPO = Path(__file__).resolve().parents[1]
 # 8123 是本项目重启 E2E(experiments/verify_paper_restart.ps1)的既有约定端口。
 DEFAULT_PORT = 8123
 PORT = DEFAULT_PORT
-BASE = f"http://127.0.0.1:{PORT}"
+# FALLBACK_BASE_URL: 容器部署时兜底容器经 Docker 网络直连 app(如 http://app:8000),
+# 覆盖"127.0.0.1 + PORT"的默认拼法。--port 参数仍优先(显式 > 环境变量 > 默认)。
+BASE = os.environ.get("FALLBACK_BASE_URL") or f"http://127.0.0.1:{PORT}"
 LOG = Path(__file__).with_suffix(".log")
 TZ = ZoneInfo("Asia/Shanghai")
 WAIT_HEALTH_SECONDS = 60
@@ -79,7 +85,22 @@ def today_handled(last_run_at: str, now: datetime, last_status: str = "") -> boo
     if not last_run_at:
         return False
     today = now.date().isoformat()
-    return last_run_at[:10] == today
+    run_date = last_run_at[:10]
+    if not _looks_like_date(run_date):
+        return False  # 格式异常 -> 宁可补跑(幂等会拦住重复), 不误判"已处理"
+    # >= 而非 ==: 跨午夜的场景(如 21:00 的 run 写成次日 00:00)也视为已处理。
+    # 未来时间戳(时钟回拨/时区错配)比"没有记录"更接近"已处理" ——
+    # 兜底此时重复推进的风险(同一交易日撮合两次)大于漏跑的风险。
+    return run_date >= today
+
+
+def _looks_like_date(s: str) -> bool:
+    """粗判是否 YYYY-MM-DD(避免为兜底脚本引入 dateutil)"""
+    try:
+        datetime.strptime(s, "%Y-%m-%d")
+        return True
+    except ValueError:
+        return False
 
 
 def run_exit_code(result: dict) -> int:
@@ -119,8 +140,14 @@ def start_server() -> subprocess.Popen | None:
 
 def main() -> int:
     global PORT, BASE
-    PORT = extract_port(sys.argv[1:])
-    BASE = f"http://127.0.0.1:{PORT}"
+    port = extract_port(sys.argv[1:])
+    if "--port" in sys.argv[1:]:
+        PORT = port
+        BASE = f"http://127.0.0.1:{PORT}"
+    # 否则保留模块级 BASE(可能来自 FALLBACK_BASE_URL)
+    ping_url = os.environ.get("STOCK_PING_URL") or None
+    if not ping_url:
+        print("ℹ️ 未配置死信开关(STOCK_PING_URL) —— 机器彻底关机时将无人通知")
     proc = None
     if not server_alive():
         print("服务未运行, 后台拉起…")
@@ -149,6 +176,10 @@ def main() -> int:
 
     if already:
         print("无需处理, 退出")
+        # 已处理也要 ping —— 对死信开关而言, "今天无事"也是一次报平安;
+        # 若只在"真的跑了"时 ping, 假日多天不 ping 会被监控误报。
+        if ping_url:
+            ping_quiet(ping_url, ok=True)
         return 0
 
     # 先确保调度配置存在(接口幂等: 已开启则原样返回当前状态)。
@@ -167,7 +198,12 @@ def main() -> int:
           f"steps={result.get('steps')} trades={result.get('trades')} "
           f"reason={result.get('reason') or result.get('error') or ''}")
     # skipped(非交易日) 与 ok 都算"今天的账已处理"; error/未知才算失败
-    return run_exit_code(result)
+    code = run_exit_code(result)
+    # 死信开关: 无论成败都 ping(失败 ping /fail 让监控立即告警)。
+    # 这是"机器彻底关机时唯一能通知到人"的机制 —— 见 scripts/watchdog_ping.py。
+    if ping_url:
+        ping_quiet(ping_url, ok=code == 0)
+    return code
 
 
 if __name__ == "__main__":
