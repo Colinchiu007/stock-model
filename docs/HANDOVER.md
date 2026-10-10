@@ -6,7 +6,7 @@
 > **文档性质**：接手前必读。读完能明白「做了什么、为什么这么做、接下来该做什么」。
 
 > **测试基线说明**（本地实测；**mypy 与精确明细一律以 CI 为准**）
-> - 本地：**799 passed, 1 skipped**（共 800）；覆盖率 **85%**
+> - 本地：**820 passed, 1 skipped**（共 821）；覆盖率 **85%**
 > - `mypy src/stock_model`：**Success, 0 errors**
 >   （2026-10-10 之前是 86 errors —— 因为 CI 装了 mypy 却从不执行它）
 > - ⚠️ **不要把逐 job 明细抄进文档**：缺 fastapi 时 `test_web_app.py` 整体算一个
@@ -78,8 +78,10 @@
 | `docs/phase4_prd_paper_trading.md` | 模拟盘 PRD（含持久化 / 定时运行 / 13 个端点） |
 | `experiments/*.py` | 4 个可复现实验脚本 |
 | `docs/bug-reflection-2026-10-10.md` | **假门禁（mypy 装了不跑）+ 空组合静默成功**，含 5 步 SOP 与变异验证记录 |
-| `experiments/verify_paper_restart.ps1` | **可复现**的「重启不丢状态」端到端验证（真起服务 + 真强杀） |
-| `experiments/verify_paper_ui.py` | **真实浏览器的 UI 验证**（Playwright）：7 项断言 + 截图，含「非交易日如实显示未执行」 |
+| `experiments/verify_paper_restart.ps1` | **可复现**的「重启不丢状态」端到端验证（真起服务 + 真强杀）。⚠️ 会清理 `data/paper/`，但**保留 `holidays.json`**（是被提交的文件，不是运行产物） |
+| `experiments/verify_paper_ui.py` | **真实浏览器的 UI 验证**（Playwright）：9 项断言 + 截图，含「非交易日如实显示未执行」「健康配置下不该有任何告警框」 |
+| `experiments/generate_holidays.py` | 生成 `data/paper/holidays.json`：**baostock + akshare 双源逐日比对**，不一致则拒绝写盘（fail-closed） |
+| `data/paper/holidays.json` | **随仓库提交**的 2026 年节假日表（19 天，由上面那个脚本生成，勿手改） |
 
 ### 2.4 质量门禁修复：一个假门禁 + 一个静默成功的空组合（2026-10-10）
 
@@ -179,6 +181,46 @@ STOCK_NOTIFY_CONSOLE=true
 - ❌ **这层测不到**：布局、字号、可读性、交互时序 —— **别把契约测试当视觉回归门禁**
 
 ---
+
+### 2.7 节假日表：从"刻意不内置"到"双源交叉验证 + 过期告警"（2026-10-10）
+
+**先记下前一版为什么刻意不内置**：交接文档原话是「未提供时只排除周末……
+**刻意不内置一份可能过期的节假日表**」。这个判断本身没错 —— 过期的表会让
+`is_trading_day` 静默退回"只排周末"。但代价是界面上一直挂着一条
+「未加载节假日表(仅排除周末)」的警告，功能始终差一格。
+
+这一版的做法是把那个顾虑**正面解决**，而不是绕过去：
+
+| 顾虑 | 解法 |
+|---|---|
+| 手写假日历会写错 | **不手写**：`experiments/generate_holidays.py` 同时向 **baostock** 与 **akshare** 取交易日历，**逐日比对**；不一致就**拒绝写盘**（fail-closed） |
+| 表会过期 | 跨年后 status 给出「已过期」warning（按**年份**判断），并且 `experiments/verify_paper_ui.py` 会在**健康配置下要求告警框为空** |
+| 覆盖范围不可知 | 只生成数据源确认覆盖的年份（实测两源都只到 `2026-12-31`，**没有 2027** —— 所以没有扩展到未确认的年份） |
+
+为什么"记错方向"的代价不对称（这是不手写的原因）：
+
+- 表里**漏**一个节假日 → 那天照常触发，引擎因无新数据空转，**无害**
+- 表里**多**一个（把真实交易日当假日）→ 那天**静默不跑**，而没人会知道
+
+2026 年表推导结果（19 天）与真实节假日完全对得上：元旦 1/1–2、春节 2/16–20 +
+2/23、清明 4/6、劳动 5/1 + 5/4–5、端午 6/19、中秋 9/25、国庆 10/1–2 + 10/5–7。
+
+**本轮在这里踩了一个自己造的 bug（值得单独记）**：第一版把"表过不过期"实现为
+「表里最晚那条日期是否已过去」。2026 年表最晚是 `2026-10-07`（国庆最后一天）——
+之后到年底本来就没有节假日了，于是**从 10 月 8 日起天天误报"已过期"**。
+
+**抓到它的是截图，不是断言。** 当时的界面断言只查了「*未加载*节假日表」这条**旧**
+告警，没查「不该出现的**新**告警」。已改为按**年份**判断，并补两把锁：
+
+- `test_table_with_only_past_dates_this_year_is_not_expired` —— 直接钉住这个误报
+- `test_no_unexpected_warnings_for_fresh_setup` —— **健康配置下 `warnings` 必须为空**。
+  与其逐条列举"不该出现的文案"，不如要求整个列表为空 —— 这样**以后新加的告警
+  只要在健康配置下误触发，就会立刻红**
+
+同时把 `experiments/verify_paper_ui.py` 的同款断言也改成"告警框必须为空"。
+
+---
+
 
 ## 三、最重要的结论：**别急着改策略**
 
@@ -309,7 +351,7 @@ STOCK_NOTIFY_CONSOLE=true
 |---|---|
 | 默认时间 | 每交易日 **15:30**（15:00 收盘后 30 分钟），每次推进 1 个交易日 |
 | 周末 | cron `day_of_week=mon-fri` 排除 |
-| 节假日 | 可选 `data/paper/holidays.json`（`["2026-10-01", ...]`）<br>**未提供时只排除周末**，`GET /api/paper/schedule` 返回 `holiday_calendar=false` + warning（刻意不内置一份可能过期的节假日表） |
+| 节假日 | `data/paper/holidays.json`（**已随仓库提供 2026 年表**）<br>由 `experiments/generate_holidays.py` 从 **baostock + akshare 双源逐日比对**生成，不一致则拒绝写盘<br>跨年后失效：`holiday_calendar` 仍为 true，但会给出「已过期」warning（按**年份**判断，见 2.7） |
 | 重入 | `max_instances=1` + `coalesce=True`：上轮没跑完就跳过，休眠错过只补跑一次 |
 | 失败 | 成功/失败/跳过全部写入可查询 status（`run_count`/`error_count`/`skipped_count`/`consecutive_failures`/`last_error`），异常进日志 |
 | 落盘失败 | 「跑成功但没存下来」按**失败**处理 —— 否则会出现"每天都在跑、账却不动" |
@@ -450,6 +492,24 @@ stub 模拟出的 `674 passed / 28 skipped`）根因全是同一个 ——
 「目前没有通知渠道 / Tab 上没有按钮」的过期描述。
 **改完一个 TODO，要 grep 全仓把它在所有文档里的引用一起改掉**（含"下一步"清单）。
 
+**告警/提示类代码：断言要覆盖"不该出现的告警"，而不只是"我删掉的那条"** ——
+本轮真栽了：给节假日表加"已过期"提示时，第一版按"表里最晚那条日期是否已过去"
+判断，而 2026 年表最晚是 `2026-10-07`（国庆），到年底本就没有节假日了 ——
+于是**从 10 月 8 日起天天误报**。
+界面断言当时只查了「*未加载*节假日表」这条**旧**告警，所以**全绿放行**。
+
+两条改进已落地：
+
+1. 「健康配置下 `warnings` 必须为空」—— 与其逐条列举不该出现的文案，
+   不如要求整个列表为空。这样**以后新加的提示只要误触发就会立刻红**
+   （`test_no_unexpected_warnings_for_fresh_setup` + 界面脚本同款断言）
+2. **截图是验证手段，不是装饰**：那个误报是**看截图**发现的，断言没发现。
+   UI 改动跑完截图**必须真的看图**，不能只看脚本输出的 ✓。
+
+**判断"是否过期/是否覆盖"时要用语义正确的依据**：能表达覆盖范围的是
+**年份**（表覆盖到哪一年），而不是"表里最晚的那条记录"。后者会被"这一年剩下的
+时间恰好没有假日"这种情况骗到。
+
 ### 5.4 不可触碰的约束
 
 | 约束 | 原因 |
@@ -496,6 +556,9 @@ pwsh -NoProfile -File experiments/verify_paper_restart.ps1
 # 前端「定时运行」卡片的真实浏览器验证（Playwright，需 playwright install chromium）
 python experiments/verify_paper_ui.py
 
+# 重新生成节假日表（跨年后需要；双源交叉验证，不一致会拒绝写盘）
+python experiments/generate_holidays.py
+
 # 四个实验脚本（需真实网络，稳定环境跑）
 python experiments/run_regime_test.py            # 分组对照
 python experiments/run_threshold_sweep.py        # 阈值敏感性
@@ -517,7 +580,8 @@ python experiments/run_trend_filter_test.py      # 趋势过滤器效果
    ├─ 卡片上就能看到 下次执行时间 / 上次成败原因 / 告警通道 / warnings
    ├─ 隔几天看一眼 run_count / error_count
    │    └─ error_count 涨了就是真出问题，别假设"它自己在跑"
-   └─ 想要精确排除节假日就补 data/paper/holidays.json（不提供则只排周末）
+   └─ 节假日表已随仓库带 2026 年版；**跨年后**卡片会提示"已过期"，
+        跑 python experiments/generate_holidays.py 重新生成即可
 
 3. 收集到足够数据（建议 ≥ 20 笔成交）后，再评估策略
    ├─ 那时才有资格谈「实盘信号质量」

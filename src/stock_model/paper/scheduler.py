@@ -341,6 +341,12 @@ class PaperScheduler:
                 "未加载节假日表(仅排除周末)。节假日当天引擎会因无新数据自动空转, "
                 f"如需精确排除请提供 {DEFAULT_HOLIDAY_FILE.name}"
             )
+        elif self._holiday_table_expired(state):
+            covered = max(d[:4] for d in self._holidays)
+            warns.append(
+                f"节假日表已过期: 只覆盖到 {covered} 年, 今年的节假日不会被排除"
+                f"(照常触发) —— 请重新生成: python experiments/generate_holidays.py"
+            )
         if state.consecutive_failures >= 2:
             warns.append(f"已连续失败 {state.consecutive_failures} 次, 请查看 last_error")
         if self._alerter is None:
@@ -352,6 +358,27 @@ class PaperScheduler:
         if state.last_alert_error:
             warns.append(f"上一条告警发送失败: {state.last_alert_error}")
         return warns
+
+    def _holiday_table_expired(self, state: ScheduleState) -> bool:
+        """节假日表是否已不覆盖"今年"
+
+        为什么按**年份**判断，而不是"表里最晚那条日期是否已过去"：
+        2026 年的表最晚一条是 ``2026-10-07``（国庆最后一天）—— 之后到年底本来
+        就没有节假日了。按"最晚日期"判断的话，**10 月 8 日起会天天误报"已过期"**。
+        实测就是这样踩到的：界面验证的截图里出现了这条误报，而当时的断言没抓到它
+        （断言只查了"未加载节假日表"那条旧告警，没查"不该出现的新告警"）。
+        教训已记入 HANDOVER 5.3。
+
+        **能**检测：表没有覆盖到今年（跨年后最典型的失效，也是这个文件的实际生命周期）。
+        **不能**检测：今年的表漏了某个节假日 —— 那要靠生成器的双源交叉验证
+        （``experiments/generate_holidays.py``），静态检查拿不到真值。
+        """
+        if not self._holidays:
+            return False
+        years = {d[:4] for d in self._holidays if isinstance(d, str)}
+        if not years:
+            return False
+        return max(years) < str(self._now(state.timezone).year)
 
     def _next_run_time(self, account_id: str) -> str:
         if self._scheduler is None:

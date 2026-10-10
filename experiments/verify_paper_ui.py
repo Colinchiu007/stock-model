@@ -33,6 +33,9 @@ SHOTS = Path(__file__).resolve().parent / "_ui_shots"
 PORT = 8145
 BASE = f"http://127.0.0.1:{PORT}"
 PAPER_DIR = REPO / "data" / "paper"
+# 这个文件是**被提交**的节假日表, 不是运行产物 —— 清理时必须留下,
+# 否则跑一次验证就把日历删了(而且开头那次清理会让 holiday_calendar 变 false)。
+KEEP = "holidays.json"
 
 
 def port_in_use(port: int = PORT) -> bool:
@@ -69,8 +72,10 @@ def main() -> int:  # noqa: PLR0915 - 线性验证脚本, 拆开反而更难对�
     PAPER_DIR.mkdir(parents=True, exist_ok=True)
     for pattern in ("*.json", "*.tmp"):
         for p in PAPER_DIR.glob(pattern):
+            if p.name == KEEP:
+                continue
             p.unlink()
-    print(f"✓ 前置检查: 端口 {PORT} 空闲; data/paper 已清空")
+    print(f"✓ 前置检查: 端口 {PORT} 空闲; data/paper 已清空(保留 {KEEP})")
 
     log = REPO / "experiments" / "_ui_server.log"
     proc = subprocess.Popen(  # noqa: S603 - 固定参数, 非外部输入
@@ -144,6 +149,26 @@ def main() -> int:  # noqa: PLR0915 - 线性验证脚本, 拆开反而更难对�
             else:
                 print(f"✓ 告警通道已显示: {alert_line}")
 
+            # ---- 状态 5b: 节假日表已加载(卡片不该再警告"仅排除周末") ----
+            sched_api = http_json("/api/paper/schedule?account_id=default")
+            if sched_api.get("holiday_calendar") is not True:
+                failures.append(
+                    "后端 holiday_calendar 不是 true —— 节假日表没被加载, 节假日会照常触发"
+                )
+            else:
+                print("✓ 后端 holiday_calendar=true（节假日表已加载）")
+            warns_text = page.locator("#pp-sched-warns").inner_text()
+            if "未加载节假日表" in warns_text:
+                failures.append(f"卡片仍在警告节假日表缺失: {warns_text!r}")
+            elif warns_text.strip():
+                # ⚠️ 这里不能只查"我认识的那条旧告警"。第一版就是只查了
+                # "未加载节假日表", 于是"节假日表已过期"这条**误报**(2026-10-08 起
+                # 天天出现)从断言下漏过去了 —— 最后是**截图**抓到的。
+                # 健康配置下不该有任何告警框, 一律视为失败。
+                failures.append(f"健康配置下出现了告警框(可能是误报): {warns_text!r}")
+            else:
+                print("✓ 卡片无告警框(节假日表已加载且未过期)")
+
             # ---- 状态 6: 无 JS 报错(真实浏览器才能发现) ----
             errors: list[str] = []
             page.on("pageerror", lambda e: errors.append(str(e)))
@@ -179,6 +204,8 @@ def main() -> int:  # noqa: PLR0915 - 线性验证脚本, 拆开反而更难对�
             failures.append("服务没被真正杀掉, 端口仍被占用")
         for pattern in ("*.json", "*.tmp"):
             for p in PAPER_DIR.glob(pattern):
+                if p.name == KEEP:
+                    continue
                 p.unlink()
 
     print()

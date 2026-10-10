@@ -38,6 +38,7 @@ $repo = Split-Path -Parent $PSScriptRoot
 $port = 8123
 $base = "http://127.0.0.1:$port"
 $paperDir = Join-Path $repo "data\paper"
+$keepHolidays = "holidays.json"   # 被提交的节假日表, 不是运行产物, 清理时保留
 $transcript = Join-Path $PSScriptRoot "_verify_output.txt"
 
 if (-not (Test-Path (Join-Path $repo "src\stock_model\web\app.py"))) {
@@ -136,8 +137,11 @@ $s1 = $null; $s2 = $null
 try {
     Write-Host "=== 0. 清理旧状态 ==="
     New-Item -ItemType Directory -Force -Path $paperDir | Out-Null
-    Get-ChildItem $paperDir -Filter *.json -ErrorAction SilentlyContinue | Remove-Item -Force
-    Write-Host "(data/paper 已清空)"
+    # ⚠️ 保留 holidays.json —— 它是**被提交**的节假日表, 不是运行产物。
+    # 删掉它会让 holiday_calendar 变 false(节假日照常触发), 而脚本自己不会报错。
+    Get-ChildItem $paperDir -Filter *.json -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne $keepHolidays } | Remove-Item -Force
+    Write-Host "(data/paper 已清空, 保留 $keepHolidays)"
 
     Write-Host "`n=== 1. 第一次启动服务 ==="
     $s1 = Start-Server "paper_e2e_p1.log"
@@ -226,9 +230,10 @@ finally {
     foreach ($p in @($s1, $s2)) { Stop-Server $p }
     Remove-LeakedServers
     Write-Host "`n=== 清理 ==="
-    Get-ChildItem $paperDir -Filter *.json -ErrorAction SilentlyContinue | Remove-Item -Force
+    Get-ChildItem $paperDir -Filter *.json -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne $keepHolidays } | Remove-Item -Force
     Get-ChildItem $paperDir -Filter *.tmp -ErrorAction SilentlyContinue | Remove-Item -Force
-    Write-Host "已清理 data/paper/"
+    Write-Host "已清理 data/paper/ (保留 $keepHolidays)"
     Write-Host "服务日志: $env:TEMP\paper_e2e_p1.log / paper_e2e_p2.log"
     Stop-Transcript | Out-Null
 }
