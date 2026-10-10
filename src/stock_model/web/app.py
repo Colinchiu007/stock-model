@@ -14,7 +14,6 @@ Web Dashboard 应用
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 from collections import deque
@@ -158,11 +157,67 @@ def _assert_single_worker() -> None:
 
 
 def _app_middleware(app: Any):
-    """返回一个把 HTTP 中间件注册到 app 的装饰器(局部使用, 便于在 create_app 内定义)"""
-    from starlette.middleware.base import BaseHTTPMiddleware
+    """注册**纯 ASGI** 认证中间件 —— 不用 BaseHTTPMiddleware
+
+    为什么: BaseHTTPMiddleware 的 dispatch 只支持 http scope, **WebSocket**
+    请求会直接断开(实测: /ws/paper closed:1006, TestClient 与真实浏览器一致)。
+    纯 ASGI 显式放行 ws/lifespan scope; 顺带把 WS 的行为定死: 不要求 token
+    (推送的是"有变化"信号, 无敏感数据; 带凭据的 WS 认证超出本次范围)。
+
+    返回的 _register 保留(内联函数用 @_app_middleware(app) 注册)。
+    """
+
+    class _AuthMiddleware:
+        def __init__(self, app_ref: Any) -> None:
+            self.app_ref = app_ref
+
+        async def __call__(self, scope: Any, receive: Any, send: Any) -> Any:
+            if scope["type"] != "http":
+                return await self.app_ref(scope, receive, send)
+            import secrets as _secrets
+
+            from stock_model.config.settings import get_settings as _gs
+
+            path = scope.get("path", "")
+            if path == "/api/health" or not path.startswith("/api"):
+                return await self.app_ref(scope, receive, send)
+            headers = {
+                k.decode("latin-1").lower(): v.decode("latin-1")
+                for k, v in scope.get("headers", [])
+            }
+            auth = headers.get("authorization", "")
+            scheme, _, credential = auth.partition(" ")
+            token = (_gs().api_token or "").strip()
+            ok = (
+                scheme.lower() == "bearer"
+                and credential
+                and _secrets.compare_digest(credential.strip(), token)
+            )
+            if not ok:
+                import json as _json
+
+                body = _json.dumps({"detail": "需要认证: Authorization: Bearer <token>"}).encode(
+                    "utf-8"
+                )
+                await send(
+                    {
+                        "type": "http.response.start",
+                        "status": 401,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"www-authenticate", b"Bearer"),
+                            (b"content-length", str(len(body)).encode()),
+                        ],
+                    }
+                )
+                await send({"type": "http.response.body", "body": body})
+                return None
+            await self.app_ref(scope, receive, send)
+            return None
+
+    app.add_middleware(_AuthMiddleware)
 
     def _register(fn):
-        app.add_middleware(BaseHTTPMiddleware, dispatch=fn)
         return fn
 
     return _register
@@ -708,6 +763,94 @@ def create_app(config: dict | None = None) -> Any:
 
         register_paper_routes(app)
 
+        # ---- 模拟盘 WebSocket 推送(TD-06) ----
+        # ⚠️ **默认关闭**(PAPER_WS_ENABLED=false): 本机环境(uvicorn 0.41 +
+        # starlette 1.0.1 + websockets 13/17)下 /ws/paper 握手被 close 1008,
+        # 纯 FastAPI 对照正常、路由匹配 FULL、handler 可直调、中间件已二分排除 ——
+        # 根因仍未定位, 详见 HANDOVER TD-06。开启前必须先用 OPERATIONS §9 的
+        # 原始 socket 验证通过。
+        import os as _os
+
+        paper_ws_enabled = _os.environ.get("PAPER_WS_ENABLED") == "1"
+        if paper_ws_enabled:
+            # 推"有变化"信号(account_id/status), 不推数据本身 —— 前端收到后走既有
+            # REST 刷新, 复用全部渲染逻辑, 避免快照同步问题。
+            # 调度器在 APScheduler 工作线程里回调, 广播经 call_soon_threadsafe
+            # 切回事件循环。
+            try:
+                import asyncio
+
+                from fastapi import WebSocket, WebSocketDisconnect
+                from starlette.websockets import WebSocketState
+
+                class _PaperBroadcaster:
+                    """维护 /ws/paper 连接列表并广播状态变更"""
+
+                    def __init__(self) -> None:
+                        self._clients: list[WebSocket] = []
+                        self._loop: asyncio.AbstractEventLoop | None = None
+
+                    def register_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+                        self._loop = loop
+
+                    def broadcast_from_thread(self, payload: dict) -> None:
+                        """供调度器线程调用: 线程安全地把广播切回事件循环"""
+                        if self._loop is None or not self._clients:
+                            return
+                        try:
+                            asyncio.run_coroutine_threadsafe(self._broadcast(payload), self._loop)
+                        except RuntimeError as err:
+                            logger.error(f"WS 广播失败(事件循环已关闭?): {err}")
+
+                    async def _broadcast(self, payload: dict) -> None:
+                        dead: list[WebSocket] = []
+                        for ws in list(self._clients):
+                            try:
+                                if ws.client_state == WebSocketState.CONNECTED:
+                                    await ws.send_json(payload)
+                            except Exception as e:
+                                logger.warning(f"WS 客户端发送失败, 移除: {e}")
+                                dead.append(ws)
+                        for ws in dead:
+                            if ws in self._clients:
+                                self._clients.remove(ws)
+
+                    async def handle(self, ws: WebSocket) -> None:
+                        await ws.accept()
+                        self._clients.append(ws)
+                        import datetime as _dt
+
+                        await ws.send_json(
+                            {
+                                "type": "paper_status_changed",
+                                "account_id": "",
+                                "status": "",
+                                "server_time": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                                "note": "connected",
+                            }
+                        )
+                        try:
+                            while True:
+                                await ws.receive_text()
+                        except WebSocketDisconnect:
+                            pass
+                        finally:
+                            if ws in self._clients:
+                                self._clients.remove(ws)
+
+                broadcaster = _PaperBroadcaster()
+
+                @app.websocket("/ws/paper")
+                async def ws_paper(websocket: WebSocket) -> None:
+                    import asyncio as _a
+
+                    broadcaster.register_loop(_a.get_running_loop())
+                    await broadcaster.handle(websocket)
+
+                logger.info("/ws/paper 已就绪 —— 状态变更将推送到开着的页面")
+            except ImportError as err:  # pragma: no cover
+                logger.error(f"模拟盘 WebSocket 不可用: {err}")
+
         # ---- 模拟盘定时任务恢复 ----
         # 定时配置落盘在 data/paper/schedule.json, 进程重启后自动接回,
         # 否则「每天自动跑」会在一次重启后静默失效(用户以为还在跑)。
@@ -718,6 +861,17 @@ def create_app(config: dict | None = None) -> Any:
             # 复用 paper_api 的装配入口: 执行体与告警通道一起配上,
             # 避免"启动恢复这条路径上漏配告警"这种局部失效。
             _paper_sched = configure_paper_scheduler()
+            # TD-06: 状态变更 -> WS 广播(调度器线程回调, broadcaster 内部切回事件循环)
+            if paper_ws_enabled and "broadcaster" in dir():
+                _paper_sched.set_change_listener(
+                    lambda account_id, status: broadcaster.broadcast_from_thread(
+                        {
+                            "type": "paper_status_changed",
+                            "account_id": account_id,
+                            "status": status,
+                        }
+                    )
+                )
             _restored = _paper_sched.restore()
             if _restored.get("error"):
                 logger.error(f"模拟盘定时任务未能恢复: {_restored['error']}")

@@ -410,7 +410,7 @@ curl -X DELETE localhost:8000/api/paper/schedule
 | TD-02 | ~~前端没有定时开关 / 状态卡~~ | ✅ **2026-10-10 已完成**：模拟盘 Tab 新增「定时运行」卡片（开关 / 执行时间 / 下次执行时间 / 上次成败原因 / 告警通道 / warnings），失败时露出 `last_error` 原文，缺 apscheduler 时禁用按钮并说明。<br>⚠️ 曾一度被重复登记为 TD-09 —— 同一缺口两处记录（一处"未做"一处"已做"）会让人看不出到底做没做，已合并回本行 |
 | TD-03 | RL Agent 超参调优（Optuna） | P3 待办 |
 | TD-05 | ~~Web Dashboard 用户认证~~ | ✅ **2026-10-10 已完成**：Bearer token 中间件（`STOCK_API_TOKEN`，默认关=向后兼容；`/api/health` 与静态豁免；`compare_digest` 时序安全 + AST 锁）。公网部署前必设；前端无登录页，浏览器侧建议反代认证 |
-| TD-06 | 实时行情 WebSocket | P4 待办 |
+| TD-06 | 实时行情 WebSocket | ⚠️ **部分完成（2026-10-10）**：服务端就绪——`/ws/paper` 端点 + 调度器三出口变更监听（单测锁定）+ 前端契约已备；但本机环境（uvicorn 0.41 + starlette 1.0.1 + websockets 13/17）握手被 close 1008，纯 FastAPI 对照正常、路由匹配 FULL、handler 可直调、auth 中间件已二分排除——根因未定位。**默认关闭**（`PAPER_WS_ENABLED=1` 开启），开启前必须用 OPERATIONS §9 的原始 socket 验证 |
 | TD-07 | Docker 化部署 | P4 待办 |
 | TD-08 | ~~定时失败没有通知渠道~~ | ✅ **2026-10-10 已完成**：复用 `notify/` 通道（控制台/文件/Webhook），配 `STOCK_NOTIFY_WEBHOOK_URL` 即可；首次失败必发、之后每 3 次、恢复时也发一条 |
 | TD-10 | **进程死了没人通知** | 心跳检测(2.8)只能在「有人来查」时提示。要『死了也主动推送』需进程外 watchdog：Windows 计划任务/healthchecks.io 这类死信开关 —— 定时 ping 一次，超时未 ping 就发通知 |
