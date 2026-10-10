@@ -145,6 +145,27 @@ STOCK_NOTIFY_CONSOLE=true
 `(未接入告警通道)` 变成 `WebhookChannel(<主机名>/***)`。
 ⚠️ URL 含 `access_token` 属凭据：**接口只回显主机名**，`.env` 不要提交。
 
+## 3b. 仪表盘 API 认证（TD-05）
+
+**未配置 = 不启用**（本地/内网使用不受影响）；**把仪表盘暴露到非本机/公网前必须设置**——
+仪表盘有 `POST /api/paper/reset`（清空账户）这类危险端点。
+
+```bash
+# .env
+STOCK_API_TOKEN=change-me-to-a-long-random-string
+```
+
+启用后 `/api/*` 全部要求 `Authorization: Bearer <token>`（401 + WWW-Authenticate）。
+豁免：`/api/health`（容器探针不能要求凭据）与静态资源/首页。
+
+**前端页面不输入 token**（无登录页）——两种正确用法：
+1. 仅在本机/内网使用（不设 token，回到"未启用"）
+2. 公网部署：在反向代理（nginx/caddy）层加认证，token 留给程序调用方
+   （`curl -H "Authorization: Bearer $TOKEN" ...`）
+
+比较用 `secrets.compare_digest`（时序安全，有 AST 锁）。
+测试：`tests/test_web_auth.py`（12 条）。
+
 ## 4. 红线（agent 必须遵守）
 
 1. **单 worker**：服务只能起一个进程（`_assert_single_worker` 会拒绝多 worker）。
@@ -231,3 +252,4 @@ docker compose exec fallback python /app/scripts/paper_daily_fallback.py
 - 2026-10-10：首版。覆盖 §1–§5 全部命令，均在本会话实测（来源见各节标注）。
 - 2026-10-10：新增 §7 Docker 部署（**容器构建未验证**，见节内说明）、§8 死信开关（§1 兜底已接入 ping，实测跳过路径）。
 - 2026-10-10：§6 预期测试数改为「以 CI 为准」。
+- 2026-10-10：新增 §3b 仪表盘认证（默认关，配置即强制；公网部署前必设）。

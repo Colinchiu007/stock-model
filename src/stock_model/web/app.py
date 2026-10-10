@@ -157,6 +157,17 @@ def _assert_single_worker() -> None:
         )
 
 
+def _app_middleware(app: Any):
+    """返回一个把 HTTP 中间件注册到 app 的装饰器(局部使用, 便于在 create_app 内定义)"""
+    from starlette.middleware.base import BaseHTTPMiddleware
+
+    def _register(fn):
+        app.add_middleware(BaseHTTPMiddleware, dispatch=fn)
+        return fn
+
+    return _register
+
+
 def create_app(config: dict | None = None) -> Any:
     """创建 FastAPI 应用实例
 
@@ -177,6 +188,8 @@ def create_app(config: dict | None = None) -> Any:
         from fastapi.responses import HTMLResponse
         from fastapi.staticfiles import StaticFiles
 
+        from stock_model.config.settings import get_settings
+
         app = FastAPI(
             title="Stock Model Dashboard",
             description="股票分析与投资模型 - Web Dashboard",
@@ -191,6 +204,42 @@ def create_app(config: dict | None = None) -> Any:
                 StaticFiles(directory=str(_static_dir)),
                 name="static",
             )
+
+        # ---- 可选 Bearer 认证(TD-05) ----
+        # 未配置 STOCK_API_TOKEN = 不启用(本地/内网体验不变)。
+        # 配置后 /api/* 全部要求 Bearer; /api/health 与静态资源豁免:
+        #   - health: 容器探针/负载均衡不能要求凭据
+        #   - 静态/首页: 无敏感数据; 前端登录页超出本次范围,
+        #     公网部署建议在反代(nginx/caddy)层加认证头 —— 见 OPERATIONS
+        # 比较用 secrets.compare_digest(时序安全)。
+        _api_token = (get_settings().api_token or "").strip()
+        if _api_token:
+            import secrets as _secrets
+
+            @_app_middleware(app)
+            async def _bearer_auth(request: Any, call_next: Any) -> Any:
+                path = request.url.path
+                exempt = path == "/api/health" or not path.startswith("/api")
+                if exempt:
+                    return await call_next(request)
+                auth = request.headers.get("authorization", "")
+                scheme, _, credential = auth.partition(" ")
+                ok = (
+                    scheme.lower() == "bearer"
+                    and credential
+                    and _secrets.compare_digest(credential.strip(), _api_token)
+                )
+                if not ok:
+                    from fastapi.responses import JSONResponse
+
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "需要认证: Authorization: Bearer <token>"},
+                        headers={"WWW-Authenticate": "Bearer"},
+                    )
+                return await call_next(request)
+
+            logger.info("仪表盘认证已启用(STOCK_API_TOKEN) —— /api/* 需要 Bearer token")
 
         # ---- 应用状态(内存, 生产环境应使用数据库/Redis) ----
 
