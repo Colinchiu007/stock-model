@@ -82,6 +82,8 @@
 | `experiments/verify_paper_ui.py` | **真实浏览器的 UI 验证**（Playwright）：9 项断言 + 截图，含「非交易日如实显示未执行」「健康配置下不该有任何告警框」 |
 | `experiments/generate_holidays.py` | 生成 `data/paper/holidays.json`：**baostock + akshare 双源逐日比对**，不一致则拒绝写盘（fail-closed） |
 | `data/paper/holidays.json` | **随仓库提交**的 2026 年节假日表（19 天，由上面那个脚本生成，勿手改） |
+| `scripts/paper_daily_fallback.py` | **每日兜底**：服务没起就拉起并补跑今天的账（幂等，给外部调度器调用） |
+| `docs/OPERATIONS.md` | **运维手册（面向 agent/自动化）**：定时任务配置、常用操作、红线、故障排查速查 |
 
 ### 2.4 质量门禁修复：一个假门禁 + 一个静默成功的空组合（2026-10-10）
 

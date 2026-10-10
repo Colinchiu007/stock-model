@@ -365,7 +365,8 @@ curl localhost:8000/api/paper/schedule    # 查状态（run/error/skipped + 最�
   没接通道时会给出 warning，不会让你误以为"失败会通知我"。
 - 端到端验证（真起服务 → 强杀 → 重启 → 比对）：`pwsh -File experiments/verify_paper_restart.ps1`
 - 详细设计见 [`docs/phase4_prd_paper_trading.md`](docs/phase4_prd_paper_trading.md)，
-  交接与踩坑记录见 [`docs/HANDOVER.md`](docs/HANDOVER.md)。
+  交接与踩坑记录见 [`docs/HANDOVER.md`](docs/HANDOVER.md)；
+**运维手册（定时任务配置、常用操作、红线、故障排查）见 [`docs/OPERATIONS.md`](docs/OPERATIONS.md)**。
 
 ⚠️ 定时运行**必须在单 worker 下**：每个 worker 一份调度器会让同一账户被重复推进
 （项目已在启动时用 `_assert_single_worker` 拒绝多 worker）。
