@@ -94,7 +94,7 @@ stock-model/
 │       ├── logger.py          # 日志 (loguru)
 │       └── helpers.py         # 辅助函数
 ├── examples/                  # 示例脚本
-├── tests/                     # 测试 (823个)
+├── tests/                     # 测试 (842个)
 ├── docs/                      # 架构/PRD/复盘文档
 ├── .github/workflows/         # CI/CD (GitHub Actions)
 └── pyproject.toml             # 项目配置
@@ -422,7 +422,7 @@ pytest tests/test_bug_regressions.py -v     # 缺陷回归保护
 pytest tests/test_parquet_fallback.py -v    # 缺可选依赖的降级路径
 ```
 
-当前共 **823** 个测试（**本地实测**：822 passed + 1 skipped）、覆盖率 **85%**（**本地实测**）。
+当前共 **842** 个测试（**本地实测**：841 passed + 1 skipped）、覆盖率 **85%**（**本地实测**）。
 
 > 📌 **本项目的规矩：文档里加粗的数字必须标来源**（写「本地实测」或「CI 实测」）。
 > 不要写一个裸数字。历史上有**三次**错数字，根因全是同一个 ——

@@ -121,7 +121,7 @@ python experiments/generate_holidays.py 2026
 ### 2.6 质量门禁（提交/合并前）
 
 ```powershell
-python -m pytest tests/ -q          # 预期 814 passed, 1 skipped
+python -m pytest tests/ -q          # 预期 841 passed, 1 skipped（数字会随测试增加而变，以 CI 为准）
 python -m mypy src/stock_model     # 预期 Success: no issues found in 57 source files
 ruff check src/ tests/             # 预期 All checks passed!
 ruff format --check src/ tests/    # 预期 92 files already formatted

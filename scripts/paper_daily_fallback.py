@@ -44,11 +44,47 @@ REPO = Path(__file__).resolve().parents[1]
 # 不用 8000 这类常见默认端口: 实测本机 8000 被另一个常驻应用(everos)占用,
 # 那种情况下脚本会在"health 不是本项目" -> "尝试再起一个"之间空转。
 # 8123 是本项目重启 E2E(experiments/verify_paper_restart.ps1)的既有约定端口。
-PORT = 8123
+DEFAULT_PORT = 8123
+PORT = DEFAULT_PORT
 BASE = f"http://127.0.0.1:{PORT}"
 LOG = Path(__file__).with_suffix(".log")
 TZ = ZoneInfo("Asia/Shanghai")
 WAIT_HEALTH_SECONDS = 60
+
+
+def extract_port(args: list[str]) -> int:
+    """从命令行解析 --port; 缺值/非数字都回退默认端口
+
+    兜底脚本由外部调度器**无人值守**调用 —— 参数配错时宁可按默认端口继续,
+    也不能抛 IndexError 让当天的账没人补。(misconfiguration ≠ 不处理)
+    """
+    if "--port" in args:
+        i = args.index("--port")
+        if i + 1 < len(args):
+            try:
+                return int(args[i + 1])
+            except ValueError:
+                print(f"⚠️ --port {args[i + 1]!r} 不是数字, 使用默认端口 {DEFAULT_PORT}")
+    return DEFAULT_PORT
+
+
+def today_handled(last_run_at: str, now: datetime, last_status: str = "") -> bool:
+    """今天是否已处理(成功/失败/跳过都算)
+
+    只比对**日期部分**, 且对格式异常宽容(返回 False 走补跑, 而不是抛异常):
+    - 失败也算: 失败已由告警通道提醒; 兜底若再重试, 立即重试多半还是失败
+      (数据源问题), 还可能与内置调度器撞车。
+    - 未来时间戳(时钟回拨/别的机器写的)日期是今天就算已处理, 不重复推进。
+    """
+    if not last_run_at:
+        return False
+    today = now.date().isoformat()
+    return last_run_at[:10] == today
+
+
+def run_exit_code(result: dict) -> int:
+    """执行结果 → 退出码; 未知状态宁可当失败(退出码是外部调度器唯一信号源)"""
+    return 0 if result.get("status") in ("ok", "skipped") else 1
 
 
 def http_json(path: str, method: str = "GET", payload: dict | None = None,
@@ -82,11 +118,9 @@ def start_server() -> subprocess.Popen | None:
 
 
 def main() -> int:
-    args = [a for a in sys.argv[1:]]
     global PORT, BASE
-    if "--port" in args:
-        PORT = int(args[args.index("--port") + 1])
-        BASE = f"http://127.0.0.1:{PORT}"
+    PORT = extract_port(sys.argv[1:])
+    BASE = f"http://127.0.0.1:{PORT}"
     proc = None
     if not server_alive():
         print("服务未运行, 后台拉起…")
@@ -107,11 +141,11 @@ def main() -> int:
         print("✓ 服务已在运行")
 
     sched = http_json("/api/paper/schedule?account_id=default")
+    now = datetime.now(TZ)
     last_run_at = sched.get("last_run_at") or ""
-    today = datetime.now(TZ).date().isoformat()
-    already = last_run_at[:10] == today
-    print(f"今日({today})已处理: {already}  last_run_at={last_run_at!r}  "
-          f"last_status={sched.get('last_status')!r}")
+    already = today_handled(last_run_at, now, sched.get("last_status") or "")
+    print(f"今日({now.date().isoformat()})已处理: {already}  "
+          f"last_run_at={last_run_at!r}  last_status={sched.get('last_status')!r}")
 
     if already:
         print("无需处理, 退出")
@@ -132,8 +166,8 @@ def main() -> int:
     print(f"执行结果: status={status} "
           f"steps={result.get('steps')} trades={result.get('trades')} "
           f"reason={result.get('reason') or result.get('error') or ''}")
-    # skipped(非交易日) 与 ok 都算"今天的账已处理"; error 才算失败
-    return 0 if status in ("ok", "skipped") else 1
+    # skipped(非交易日) 与 ok 都算"今天的账已处理"; error/未知才算失败
+    return run_exit_code(result)
 
 
 if __name__ == "__main__":
