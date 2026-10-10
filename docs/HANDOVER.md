@@ -409,7 +409,7 @@ curl -X DELETE localhost:8000/api/paper/schedule
 | TD-01 | 多 worker 状态共享 | 已收口为「启动即报错」守卫；真正共享需抽独立服务。**定时调度同样假定单 worker**（每进程一份调度器会让同一账户被重复推进） |
 | TD-02 | ~~前端没有定时开关 / 状态卡~~ | ✅ **2026-10-10 已完成**：模拟盘 Tab 新增「定时运行」卡片（开关 / 执行时间 / 下次执行时间 / 上次成败原因 / 告警通道 / warnings），失败时露出 `last_error` 原文，缺 apscheduler 时禁用按钮并说明。<br>⚠️ 曾一度被重复登记为 TD-09 —— 同一缺口两处记录（一处"未做"一处"已做"）会让人看不出到底做没做，已合并回本行 |
 | TD-03 | RL Agent 超参调优（Optuna） | P3 待办 |
-| TD-05 | Web Dashboard 用户认证 | P4 待办 |
+| TD-05 | ~~Web Dashboard 用户认证~~ | ✅ **2026-10-10 已完成**：Bearer token 中间件（`STOCK_API_TOKEN`，默认关=向后兼容；`/api/health` 与静态豁免；`compare_digest` 时序安全 + AST 锁）。公网部署前必设；前端无登录页，浏览器侧建议反代认证 |
 | TD-06 | 实时行情 WebSocket | P4 待办 |
 | TD-07 | Docker 化部署 | P4 待办 |
 | TD-08 | ~~定时失败没有通知渠道~~ | ✅ **2026-10-10 已完成**：复用 `notify/` 通道（控制台/文件/Webhook），配 `STOCK_NOTIFY_WEBHOOK_URL` 即可；首次失败必发、之后每 3 次、恢复时也发一条 |

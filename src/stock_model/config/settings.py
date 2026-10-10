@@ -122,6 +122,12 @@ class Settings(BaseSettings):
     # 环境
     env: str = Field(default="development", description="运行环境")
     debug: bool = Field(default=False, description="调试模式")
+    api_token: str | None = Field(
+        default=None,
+        description="仪表盘 API 访问令牌(STOCK_API_TOKEN)。"
+        "未设置 = 不启用认证(本地/内网)；设置后 /api/* 全部要求 Bearer token"
+        "(/api/health 与静态资源豁免)。把仪表盘暴露到公网前必须设置。",
+    )
 
     # 子配置
     data: DataSettings = Field(default_factory=DataSettings)
