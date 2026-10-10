@@ -394,12 +394,13 @@ pytest tests/test_parquet_fallback.py -v    # 缺可选依赖的降级路径
 ```
 
 当前共 **761** 个测试（本地装齐可选依赖：760 passed + 1 skipped）。
-⚠️ 本节的数字**必须在 CI 跑完后按 CI 实测回填** —— 各 job 环境不同，数字本就不同：
+各 job 环境不同、数字本就不同 —— 下表为 **CI 实测**：
 
 | Job | 结果 |
 |-----|------|
-| Test（Python 3.10 / 3.11 / 3.12） | 见 CI 运行结果（缺可选依赖，skip 多于本地） |
-| Test Optional Dependencies（装齐 `[dev,quant,schedule,web,ta]`） | 见 CI 运行结果 |
+| Test（Python 3.10 / 3.11 / 3.12） | 678 passed, 36 skipped, **0 失败** |
+| Test Optional Dependencies（装齐 `[dev,quant,schedule,web,ta]`） | 752 passed, 9 skipped |
+| Lint（含 `mypy src/stock_model`） | **Success: no issues found in 57 source files** |
 
 覆盖率 **85%**。各 job 的**收集总数本就不同**（缺 fastapi 时整个 `test_web_app.py`
 作为一个 skip 条目），这是环境差异、不是文档该对齐的数字。

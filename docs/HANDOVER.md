@@ -5,9 +5,11 @@
 > **仓库**：`Colinchiu007/stock-model`（A股量化分析工具）
 > **文档性质**：接手前必读。读完能明白「做了什么、为什么这么做、接下来该做什么」。
 
-> **测试基线说明**（本地装齐可选依赖实测；**CI 数字以 CI 为准**）
+> **测试基线说明**（本地 + CI 实测；**mypy 一律以 CI 为准**）
 > - 本地：**760 passed, 1 skipped**（共 761）
-> - **`mypy src/stock_model`：Success, 0 errors**
+> - CI `Test (3.10 / 3.11 / 3.12)`：**678 passed, 36 skipped, 0 失败**
+> - CI `Test Optional Dependencies`：**752 passed, 9 skipped**（收集总数 761，与本地一致）
+> - CI `Lint`：**`mypy src/stock_model` → Success, no issues found in 57 source files**
 >   （2026-10-10 之前是 86 errors —— 因为 CI 装了 mypy 却从不执行它）
 > - 覆盖率：**85%**
 > - 本轮新增 20 个测试：质量门禁锁 8 / 组合优化分派与守卫 8 / 其它 4
