@@ -94,7 +94,7 @@ stock-model/
 │       ├── logger.py          # 日志 (loguru)
 │       └── helpers.py         # 辅助函数
 ├── examples/                  # 示例脚本
-├── tests/                     # 测试 (741个)
+├── tests/                     # 测试 (761个)
 ├── docs/                      # 架构/PRD/复盘文档
 ├── .github/workflows/         # CI/CD (GitHub Actions)
 └── pyproject.toml             # 项目配置
@@ -393,14 +393,15 @@ pytest tests/test_bug_regressions.py -v     # 缺陷回归保护
 pytest tests/test_parquet_fallback.py -v    # 缺可选依赖的降级路径
 ```
 
-当前共 **741** 个测试。CI 各 job 实测：
+当前共 **761** 个测试（本地装齐可选依赖：760 passed + 1 skipped）。
+⚠️ 本节的数字**必须在 CI 跑完后按 CI 实测回填** —— 各 job 环境不同，数字本就不同：
 
 | Job | 结果 |
 |-----|------|
-| Test（Python 3.10 / 3.11 / 3.12） | 666 passed, 36 skipped, **0 失败** |
-| Test Optional Dependencies（装齐 `[dev,quant,schedule,web,ta]`） | 732 passed, 9 skipped |
+| Test（Python 3.10 / 3.11 / 3.12） | 见 CI 运行结果（缺可选依赖，skip 多于本地） |
+| Test Optional Dependencies（装齐 `[dev,quant,schedule,web,ta]`） | 见 CI 运行结果 |
 
-覆盖率 **81%**。两个 job 的**收集总数本就不同**（缺 fastapi 时整个 `test_web_app.py`
+覆盖率 **85%**。各 job 的**收集总数本就不同**（缺 fastapi 时整个 `test_web_app.py`
 作为一个 skip 条目），这是环境差异、不是文档该对齐的数字。
 
 > **关于跳过的测试**：skip 均为「可选依赖未安装」类
@@ -411,12 +412,23 @@ pytest tests/test_parquet_fallback.py -v    # 缺可选依赖的降级路径
 > 在 CI 主 job 里也照跑 —— 它们锁的是「重启不丢状态」，不该被环境差异掩盖。
 > 定时运行的用例需要 `apscheduler`，缺依赖时跳过。
 
+> ⚠️ **不要把本地模拟出来的数字写进文档**：曾用「PYTHONPATH 前置 stub 挡掉可选依赖」
+> 模拟 CI 主 job，得到 `674 passed / 28 skipped`；真实 CI 是 `666 passed / 36 skipped`
+> （收集总数一致，但 pass/skip 拆分差了 8 个 —— stub 只挡你列出的包）。
+> 模拟能确认「不会失败」，**不能用来写文档里的数字**。
+
 ## CI/CD
 
 - **GitHub Actions**: 自动CI (push/PR触发)
-  - Lint: Ruff check + format
+  - Lint: **Ruff check + Ruff format check + Mypy 类型检查**
   - Test: Python 3.10/3.11/3.12 矩阵测试 + 覆盖率
   - Build: 构建包 + twine 检查
+- **类型检查**: `mypy src/stock_model`（`pyproject.toml` 的 `[[tool.mypy.overrides]]`
+  点名豁免了 11 个无类型信息/未安装的依赖；**不用全局 ignore_missing_imports**，
+  以保证新引入无类型依赖时会报错）
+- **门禁自身的锁**: `tests/test_quality_gates.py` 保证 CI 里**真的有**执行 mypy 的步骤 ——
+  历史上 CI 装了 mypy 却从未运行，存量 86 个错误无人可见（详见
+  [`docs/bug-reflection-2026-10-10.md`](docs/bug-reflection-2026-10-10.md)）
 - **分支保护**: main分支要求PR审查 + CI通过
 - **Release**: `v*` tag自动构建 + GitHub Release
 

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
@@ -34,7 +35,9 @@ class Portfolio:
     name: str = "default"
     total_value: float = 0.0
     weights: list[PortfolioWeight] = field(default_factory=list)
-    metrics: dict[str, float] = field(default_factory=dict)
+    # 混合类型: method(str) / n_assets(int) / volatilities(dict)。
+    # 原注解 dict[str, float] 与实现不符(5 处 dict-item 报错), 是注解在说谎。
+    metrics: dict[str, Any] = field(default_factory=dict)
 
     @property
     def symbols(self) -> list[str]:

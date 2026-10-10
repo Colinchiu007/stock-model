@@ -101,6 +101,39 @@ python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 
+# ---- 无类型信息的依赖：**点名**豁免，不用全局 ignore_missing_imports ----
+#
+# 历史上这段配置从来没被执行过（CI 装了 mypy 却只跑 ruff），存量 86 个错误
+# 无人可见。现在既然接进 CI，就必须把「哪些依赖查不了」写清楚。
+#
+# 为什么不写一行 `ignore_missing_imports = true` 了事：
+# 全局忽略会让**新引入一个无类型依赖**这件事彻底不可见；点名豁免则保证
+# 新依赖冒出来时 mypy 会报错，逼人做一次决定（补 stub，或登记到这张表里）。
+# tests/test_quality_gates.py 锁住了这一点。
+#
+# 下面三项分类依据是实测（包目录下有无 py.typed / 是否装得上），不是猜的：
+#   1) 上游没有 py.typed、PyPI 也无官方 stub —— 只能豁免
+#   2) 有官方 stub 包但未安装（装 types-* 即可收紧，属后续优化，不在本次范围）
+#   3) CI 不装的可选依赖（rl / ta extra）—— 由 tests 用 importorskip 兜住
+[[tool.mypy.overrides]]
+module = [
+    # 1) 上游无类型信息
+    "akshare.*",
+    "baostock.*",
+    "plotly.*",
+    "apscheduler.*",
+    "scipy.*",
+    # 2) 有 stub 包但没装：pandas-stubs / types-PyYAML / types-requests
+    "pandas.*",
+    "yaml.*",
+    "requests.*",
+    # 3) CI 不安装的可选依赖
+    "gymnasium.*",
+    "stable_baselines3.*",
+    "pandas_ta.*",
+]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-v --tb=short"

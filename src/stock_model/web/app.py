@@ -59,6 +59,12 @@ except ImportError:
     PipelineStartRequest = None  # type: ignore[assignment, misc]
 
 
+# 需要收益率序列的组合优化方法(只有 equal_weight 只要价格)。
+# 端点守卫与分派都必须与这里保持一致 —— 否则会出现
+# 「某方法取不到收益率却返回 200 + 空组合」(详见 PortfolioOptimizer._assert_has_returns)
+RETURNS_BASED_METHODS = ("risk_parity", "min_variance", "mean_variance")
+
+
 class MultiWorkerNotSupportedError(RuntimeError):
     """检测到多 worker 部署时抛出
 
@@ -551,23 +557,47 @@ def create_app(config: dict | None = None) -> Any:
                 if not prices_dict:
                     raise HTTPException(status_code=404, detail="无法获取数据")
 
-                optimizer = PortfolioOptimizer()
-                method_map = {
-                    "equal_weight": optimizer.equal_weight,
-                    "risk_parity": optimizer.risk_parity,
-                    "min_variance": optimizer.min_variance,
-                    "mean_variance": optimizer.mean_variance,
-                }
+                # 守卫必须匹配**每个分支真正的前置条件**:
+                # equal_weight 只要价格, 另外三个要收益率序列。
+                # 实测踩过: 只管价格时, method=risk_parity + 标的只有 1 根 K 线
+                # 会返回 200 + weights={} —— 看着像优化成功, 其实什么都没算。
+                if method in RETURNS_BASED_METHODS and not returns_dict:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"{method} 需要收益率序列, 但取到的行情不足以计算"
+                            "(至少 2 根 K 线)。请拉长区间, 或改用 equal_weight。"
+                        ),
+                    )
 
-                opt_func = method_map.get(method, optimizer.equal_weight)
-                if method in ("risk_parity", "min_variance", "mean_variance"):
-                    portfolio = opt_func(
+                optimizer = PortfolioOptimizer()
+
+                # 显式分支, 不用 method_map + dict.get:
+                # 查表会让 mypy 把 opt_func 推成调用方的联合类型, 于是每个关键字
+                # 参数都与"另一个方法"的签名冲突(app.py:564/570 两处 call-arg 误报)。
+                # 而且这两个签名本来就不同 —— equal_weight 收 symbols, 其余收 returns。
+                # 拆开写既让类型检查成立, 也比查表好读; 未知 method 落到 equal_weight,
+                # 与原先 `.get(method, optimizer.equal_weight)` 行为一致。
+                if method == "risk_parity":
+                    portfolio = optimizer.risk_parity(
+                        returns=returns_dict,
+                        prices=prices_dict,
+                        total_value=100000,
+                    )
+                elif method == "min_variance":
+                    portfolio = optimizer.min_variance(
+                        returns=returns_dict,
+                        prices=prices_dict,
+                        total_value=100000,
+                    )
+                elif method == "mean_variance":
+                    portfolio = optimizer.mean_variance(
                         returns=returns_dict,
                         prices=prices_dict,
                         total_value=100000,
                     )
                 else:
-                    portfolio = opt_func(
+                    portfolio = optimizer.equal_weight(
                         symbols=symbol_list,
                         prices=prices_dict,
                         total_value=100000,
@@ -581,6 +611,11 @@ def create_app(config: dict | None = None) -> Any:
 
             except HTTPException:
                 raise
+            except ValueError as e:
+                # 优化器对"前置条件不满足"抛 ValueError(例如收益率序列为空)。
+                # 这是调用方参数问题 → 400, 不要混进 500 里当成服务端故障。
+                logger.warning(f"组合优化前置条件不满足: {e}")
+                raise HTTPException(status_code=400, detail=str(e)) from e
             except Exception as e:
                 logger.error(f"组合优化失败: {e}")
                 raise HTTPException(status_code=500, detail=str(e)) from e

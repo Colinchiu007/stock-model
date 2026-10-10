@@ -27,6 +27,32 @@ class PortfolioOptimizer:
     def __init__(self, risk_free_rate: float = 0.03):
         self.risk_free_rate = risk_free_rate  # 无风险利率(年化)
 
+    @staticmethod
+    def _assert_has_returns(returns: pd.DataFrame, method: str) -> None:
+        """收益率序列为空时**显式失败**, 不返回空组合
+
+        为什么必须抛错而不是返回 `Portfolio(name=...)`
+        ----------------------------------------------
+        空组合与"算完了但没分配权重"在调用方看来一模一样。实测踩过:
+
+            GET /api/portfolio/optimize?method=risk_parity
+            (标的只有 1 根 K 线 → 算不出 pct_change → returns 为空)
+            → 200 {"method":"risk_parity","weights":{},"total_value":0.0}
+
+        HTTP 200 + 看着像成功的结构, 前端会把它渲染成"优化完成, 权重为空"。
+        `total_value` 还会从调用方要求的 100000 悄悄变成 0 —— 因为
+        `Portfolio(name=...)` 用的是默认值。这是本项目最怕的那类结果:
+        **不报错, 但答案是错的**。
+
+        引入点: c7feba9 (2026-10-03), 同一模式原有 4 处。
+        """
+        if returns.empty:
+            raise ValueError(
+                f"{method} 需要收益率序列, 但传入为空 —— 通常是行情历史不足"
+                "(例如只有 1 根 K 线, 无法计算 pct_change)。"
+                "请拉长区间或改用不需要收益率的 equal_weight。"
+            )
+
     def equal_weight(
         self,
         symbols: list[str],
@@ -45,7 +71,9 @@ class PortfolioOptimizer:
         """
         n = len(symbols)
         if n == 0:
-            return Portfolio(name="equal_weight")
+            # 刻意不返回空组合: 空组合与"算完但没权重"在调用方看来完全一样。
+            # 详见 _assert_has_returns 的说明。
+            raise ValueError("等权重组合需要至少 1 个标的, 但传入为空")
 
         weight = 1.0 / n
         weights = []
@@ -95,8 +123,7 @@ class PortfolioOptimizer:
         # 统一转换为DataFrame
         if isinstance(returns, dict):
             returns = pd.DataFrame(returns)
-        if returns.empty:
-            return Portfolio(name="risk_parity")
+        self._assert_has_returns(returns, "风险平价")
 
         # 计算波动率
         vols = returns.std() * np.sqrt(252)  # 年化波动率
@@ -164,8 +191,7 @@ class PortfolioOptimizer:
         # 统一转换为DataFrame
         if isinstance(returns, dict):
             returns = pd.DataFrame(returns)
-        if returns.empty:
-            return Portfolio(name="min_variance")
+        self._assert_has_returns(returns, "最小方差")
 
         cov_matrix = returns.cov() * 252  # 年化协方差
         symbols = list(cov_matrix.columns)
@@ -270,8 +296,7 @@ class PortfolioOptimizer:
         # 统一转换为DataFrame
         if isinstance(returns, dict):
             returns = pd.DataFrame(returns)
-        if returns.empty:
-            return Portfolio(name="mean_variance")
+        self._assert_has_returns(returns, "均值方差")
 
         mean_returns = returns.mean() * 252  # 年化收益
         cov_matrix = returns.cov() * 252  # 年化协方差

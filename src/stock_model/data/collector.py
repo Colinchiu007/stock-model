@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     import pandas as pd
+    from apscheduler.schedulers.background import BackgroundScheduler
 
 
 class MissingDependencyError(ImportError):
@@ -45,8 +46,12 @@ class AutoDataCollector:
     def __init__(self, fetcher: StockDataFetcher | None = None):
         self._fetcher = fetcher or StockDataFetcher()
         self._watchlist: list[str] = []
-        self._callbacks: list[Callable] = []
-        self._scheduler = None
+        # 回调既可以是 callback(symbol, df), 也可以是 ("error", callback) 二元组
+        self._callbacks: list[Callable[..., Any] | tuple[str, Callable[..., Any]]] = []
+        # apscheduler 是可选依赖: 未安装时保持 None, start() 会抛 MissingDependencyError。
+        # 必须写注解 —— 不写时 mypy 把类型推断成 None, 于是 add_job()/start()
+        # 被报成「"None" has no attribute ...」(属注解缺失, 非运行时缺陷)
+        self._scheduler: BackgroundScheduler | None = None
         self._running = False
         self._collect_count = 0
         self._error_count = 0
@@ -126,7 +131,13 @@ class AutoDataCollector:
 
                     # 触发数据回调
                     for cb in self._callbacks:
-                        if isinstance(cb, tuple) and cb[0] == "error":
+                        # 写 isinstance(cb, tuple) 而不是 `cb[0] == "error"`:
+                        # 前者能让类型收窄成立(否则 mypy 报 "tuple[...] not callable"),
+                        # 而且未知标签会被显式告警, 而不是被当成函数直接调用后
+                        # 冒出一句莫名其妙的 "'tuple' object is not callable"。
+                        if isinstance(cb, tuple):
+                            if cb[0] != "error":
+                                logger.warning(f"未处理的数据回调标签 {cb[0]!r}, 已跳过")
                             continue
                         try:
                             cb(symbol, df)

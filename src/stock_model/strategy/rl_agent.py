@@ -121,7 +121,11 @@ class RLTradingAgent(BaseStrategy):
             model_type: 模型类型 ("ppo" 或 "dqn")
         """
         self.model_type = model_type.lower()
-        self._model = None
+        # stable_baselines3 是可选依赖且无类型信息, 故用 Any:
+        # 不写注解时 mypy 会把 _model 推断成 None, 于是 self._model.learn /
+        # self._model.predict 被报成「"None" has no attribute ...」。
+        # 属注解缺失, 不是运行时缺陷 —— analyze() 有 `_model is not None` 守卫。
+        self._model: Any = None
         self._trained = False
         self._training_metrics: list[dict] = []
 

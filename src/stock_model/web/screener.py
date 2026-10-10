@@ -15,10 +15,13 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 from loguru import logger
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def _signal_to_dict(signal: Any) -> dict:
@@ -36,7 +39,7 @@ def _analyze_one(
     symbol: str,
     data_source: str,
     start_date: str,
-    strategy_cls: type,
+    strategy_cls: Callable[[], Any],
     min_rows: int,
 ) -> dict:
     """分析单只股票, 返回结构化结果

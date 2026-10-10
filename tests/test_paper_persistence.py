@@ -126,7 +126,9 @@ class TestRestartResumes:
         """
         engine = paper_api._get_engine("acc")
         first_dates = [engine.step()["date"] for _ in range(5)]
-        assert paper_api._persist("acc", engine) is True
+        # _persist 返回 (是否成功, 失败原因) —— 不是裸 bool
+        persisted, persist_error = paper_api._persist("acc", engine)
+        assert persisted is True, persist_error
         n_equity = len(engine.account.equity_curve)
 
         _restart()
@@ -159,7 +161,8 @@ class TestRestartResumes:
             )
         )
         before = engine.account
-        assert paper_api._persist("acc", engine) is True
+        persisted, persist_error = paper_api._persist("acc", engine)
+        assert persisted is True, persist_error
 
         _restart()
         restored = paper_api._get_engine("acc")

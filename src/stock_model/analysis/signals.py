@@ -75,7 +75,7 @@ class SignalGenerator:
         prefix_upper = prefix.upper()
         for col in df.columns:
             if col.upper().startswith(prefix_upper):
-                return col
+                return str(col)
         return None
 
     def ma_cross_signal(self, df: pd.DataFrame, symbol: str = "") -> list[Signal]:
@@ -88,7 +88,7 @@ class SignalGenerator:
         # 仅在列不存在时才计算
         if "ma5" not in df.columns or "ma20" not in df.columns:
             df = self.ta.ma(df, periods=[5, 10, 20, 60])
-        signals = []
+        signals: list[Signal] = []
 
         if len(df) < 2:
             return signals
@@ -142,7 +142,7 @@ class SignalGenerator:
             macd_col = self._find_column(df, "MACD_")
             signal_col = self._find_column(df, "MACDs_")
 
-        signals = []
+        signals: list[Signal] = []
 
         if len(df) < 2 or macd_col is None or signal_col is None:
             return signals
@@ -193,7 +193,7 @@ class SignalGenerator:
             df = self.ta.rsi(df)
             rsi_col = self._find_column(df, "RSI")
 
-        signals = []
+        signals: list[Signal] = []
 
         if rsi_col is None or len(df) < 1:
             return signals
@@ -241,7 +241,7 @@ class SignalGenerator:
             lower_col = self._find_column(df, "BBL_")
             upper_col = self._find_column(df, "BBU_")
 
-        signals = []
+        signals: list[Signal] = []
 
         if lower_col is None or upper_col is None or len(df) < 1:
             return signals
