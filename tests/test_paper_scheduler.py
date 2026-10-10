@@ -200,6 +200,98 @@ class TestHolidayTable:
         assert s.status("default")["warnings"] == [], s.status("default")["warnings"]
 
 
+class TestHeartbeat:
+    """距上次**任何活动**超过阈值 → 提示"可能根本没在跑"
+
+    为什么需要: 告警只能证明"进程活着时出过错", **证明不了"进程还活着"**。
+    服务被停/机器关机不会产生失败记录, error_count 不会涨,
+    唯一会变旧的是 last_run_at —— 而没人会天天去看这个字段。
+
+    日期一律取相对 now 的值写入, 保证测试**永不随时间失效**
+    (本项目有教训: 写死 2026-10-07 的日期, 一到 10/08 测试语义就变了)。
+    """
+
+    def _sched_with_last_run(self, tmp_path, last_run_at: str, **kwargs):
+        s = make_scheduler(tmp_path, **kwargs)
+        s.set_runner(lambda a, d: {"status": "ok", "persisted": True})
+        s.set_alerter(lambda m: None, description="test")
+        state = register(s)
+        state.last_run_at = last_run_at
+        return s, state
+
+    def test_recent_run_is_not_warned(self, tmp_path):
+        """刚跑过(1 小时前)不提示 —— 心跳检测最怕误报"""
+        recent = (datetime.now(CST) - timedelta(hours=1)).isoformat()
+        s, _ = self._sched_with_last_run(tmp_path, recent)
+        warns = s.status("default")["warnings"]
+        assert not any("没在跑" in w for w in warns), warns
+
+    def test_stale_run_is_warned(self, tmp_path):
+        """超过阈值(7 天)必须提示, 且说清"不产生失败记录"这个反直觉点"""
+        stale = (datetime.now(CST) - timedelta(days=9)).isoformat()
+        s, _ = self._sched_with_last_run(tmp_path, stale)
+        warns = s.status("default")["warnings"]
+        hit = [w for w in warns if "没在跑" in w]
+        assert hit, warns
+        assert "不会" in hit[0] and "失败记录" in hit[0]
+        assert "9 天" in hit[0] or "8 天" in hit[0], "应给出人类可读的时长"
+
+    def test_skipped_run_counts_as_alive(self, tmp_path):
+        """跳过同样证明调度器活着 —— 周末/假日跳过不该触发心跳告警
+
+        走**真实的** skipped 路径(run_now 在非交易日), 而不是手工摆字段:
+        手工摆字段锁不住"实现改了读哪个字段"(第一版变异验证就没红, 是假锁)。
+        """
+        # 把"2 天前"那天设为假日, 强制 run_now 走 skipped 路径
+        # (那天若落在周末, 本来就会 skipped, 写进假日历对两种情况都成立)
+        two_days_ago = (datetime.now(CST) - timedelta(days=2)).date()
+        s = make_scheduler(tmp_path, holidays=[two_days_ago.isoformat()])
+        s.set_runner(lambda a, d: {"status": "ok", "persisted": True})
+        s.set_alerter(lambda m: None, description="test")
+        register(s)
+        s.run_now("default", now=datetime.now(CST) - timedelta(days=2))
+        info = s.status("default")
+        assert info["last_status"] == "skipped", info["last_result"]
+        assert not any("没在跑" in w for w in info["warnings"]), info["warnings"]
+
+    def test_no_run_at_all_is_not_heartbeat(self, tmp_path):
+        """从未跑过不触发心跳(刚开启属正常) —— 由既有告警体系覆盖其它情况"""
+        s, _ = self._sched_with_last_run(tmp_path, "")
+        assert not any("没在跑" in w for w in s.status("default")["warnings"])
+
+    def test_bad_timestamp_does_not_break_status(self, tmp_path):
+        """坏时间戳不能把 status 弄挂 —— 监控代码自己是最后防线"""
+        s, _ = self._sched_with_last_run(tmp_path, "这不是时间")
+        info = s.status("default")  # 不应抛异常
+        assert not any("没在跑" in w for w in info["warnings"])
+
+    def test_naive_timestamp_still_works(self, tmp_path):
+        """旧版本持久化的 naive 时间戳(无时区)也能比较, 不能抛 TypeError"""
+        naive = (datetime.now(CST) - timedelta(days=10)).replace(tzinfo=None).isoformat()
+        s, _ = self._sched_with_last_run(tmp_path, naive)
+        assert any("没在跑" in w for w in s.status("default")["warnings"])
+
+    def test_interval_threshold_scales_with_interval(self, tmp_path):
+        """interval 模式阈值跟间隔走(3 倍), 不能拿 7 天去衡量 5 分钟一次的任务"""
+        recent = (datetime.now(CST) - timedelta(minutes=20)).isoformat()
+        s = make_scheduler(tmp_path)
+        s.set_runner(lambda a, d: {"status": "ok", "persisted": True})
+        s.set_alerter(lambda m: None, description="test")
+        state = register(s)
+        state.trigger_type = "interval"
+        state.interval_minutes = 5  # 阈值 = max(15, 10) 分钟 → 20 分钟前已过期
+        state.last_run_at = recent
+        assert any("没在跑" in w for w in s.status("default")["warnings"])
+
+    def test_warning_disappears_after_a_run(self, tmp_path):
+        """提示必须能**自愈**: 服务恢复跑一轮后, 告警就该消失 —— 否则永远挂着"""
+        stale = (datetime.now(CST) - timedelta(days=9)).isoformat()
+        s, state = self._sched_with_last_run(tmp_path, stale)
+        assert any("没在跑" in w for w in s.status("default")["warnings"])
+        s.run_now("default", now=datetime.now(CST))  # 恢复执行
+        assert not any("没在跑" in w for w in s.status("default")["warnings"])
+
+
 class TestCommittedHolidayCalendar:
     """锁住**已提交**的 data/paper/holidays.json
 
