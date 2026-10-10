@@ -94,7 +94,7 @@ stock-model/
 │       ├── logger.py          # 日志 (loguru)
 │       └── helpers.py         # 辅助函数
 ├── examples/                  # 示例脚本
-├── tests/                     # 测试 (787个)
+├── tests/                     # 测试 (797个)
 ├── docs/                      # 架构/PRD/复盘文档
 ├── .github/workflows/         # CI/CD (GitHub Actions)
 └── pyproject.toml             # 项目配置
@@ -408,7 +408,7 @@ pytest tests/test_bug_regressions.py -v     # 缺陷回归保护
 pytest tests/test_parquet_fallback.py -v    # 缺可选依赖的降级路径
 ```
 
-当前共 **787** 个测试（本地装齐可选依赖：786 passed + 1 skipped），覆盖率 **85%**。
+当前共 **797** 个测试（本地装齐可选依赖：796 passed + 1 skipped），覆盖率 **85%**。
 
 > **为什么这里只有一个数字、不列各 job 明细**：各 job 的收集总数本就不同
 > （缺 fastapi 时整个 `test_web_app.py` 作为一个 skip 条目），而且每加一个测试

@@ -139,6 +139,27 @@ main { padding: 20px 24px 48px; max-width: 1500px; }
 .badge.sell { background: rgba(239,83,80,.16);  color: var(--sell); }
 .badge.hold { background: rgba(120,144,156,.16); color: var(--hold); }
 
+/* ---------- 定时运行卡片 ----------
+   状态用「文字前缀 + 颜色」双通道表达(● 已开启 / ● 未开启 / ● 不可用)，
+   不单靠颜色 —— 色盲用户与灰度截图同样能读懂。 */
+.schedule-card { margin-bottom: 20px; }
+.sched-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.sched-line { font-size: 12px; margin-bottom: 3px; word-break: break-word; }
+.badge.ok   { background: rgba(38,166,154,.16); color: var(--buy); }
+.badge.err  { background: rgba(239,83,80,.16);  color: var(--sell); }
+.badge.idle { background: rgba(120,144,156,.16); color: var(--hold); }
+.sched-actions {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+  margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border);
+}
+.sched-actions label { font-size: 12px; color: var(--text-dim); }
+.sched-actions input[type="time"] {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 4px 6px; font-size: 12px;
+}
+.sched-actions input[type="time"]:focus { outline: none; border-color: var(--accent); }
+.sched-actions .btn:disabled { opacity: .5; cursor: not-allowed; }
+
 .score { font-weight: 600; font-variant-numeric: tabular-nums; }
 .score.pos { color: var(--buy); }
 .score.neg { color: var(--sell); }

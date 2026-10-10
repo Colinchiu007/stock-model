@@ -407,6 +407,141 @@ setInterval(() => {
 
 const PAPER = { busy: false };
 
+// ---------- 定时运行 ----------
+// 诚实性约定（与后端的花了心思保持一致）：
+//   · 查不到状态 → 显示"状态不明"，不显示成"未开启"
+//   · 缺 apscheduler → 后端返回 503，这里把原因写出来并**禁用按钮**
+//   · 上次失败 → 把 last_error 原文显示出来，并带上连续失败次数
+//   · 非交易日"立即执行"返回 skipped → 如实显示"未执行：非交易日"
+// 一句话：宁可显示坏消息，也不要让人以为它在跑。
+function _schedSetState(text, cls) {
+  const el = $('pp-sched-state');
+  el.textContent = text;
+  el.className = 'badge ' + cls;
+}
+
+function _schedSetDisabled(disabled) {
+  $('pp-sched-start').disabled = disabled;
+  $('pp-sched-stop').disabled = disabled;
+  $('pp-sched-run').disabled = disabled;
+}
+
+function _schedLastText(s) {
+  if (!s.last_run_at) return '尚无执行记录';
+  const when = new Date(s.last_run_at).toLocaleString();
+  if (s.last_status === 'ok') {
+    const r = s.last_result || {};
+    return `上次 ${when} 成功 · ${r.steps || 0} 步 / ${r.trades || 0} 笔成交`;
+  }
+  if (s.last_status === 'skipped') return `上次 ${when} 跳过（非交易日）`;
+  if (s.last_status === 'error') {
+    const n = s.consecutive_failures || 0;
+    return `上次 ${when} 失败（连续 ${n} 次）· ${s.last_error || '原因未知'}`;
+  }
+  return `上次 ${when}`;
+}
+
+function renderSchedule(s) {
+  if (!s || s.running !== true) {
+    _schedSetState('● 未开启', 'idle');
+    $('pp-sched-plan').textContent = s && s.restore_error
+      ? `定时任务未能恢复：${s.restore_error}`
+      : '未开启 —— 开启后会在每个交易日按设定时间自动推进';
+    $('pp-sched-last').textContent = '尚无执行记录';
+    $('pp-sched-alert').textContent = '';
+    $('pp-sched-warns').innerHTML = '';
+    $('pp-sched-warns').classList.add('hidden');
+    return;
+  }
+
+  _schedSetState('● 已开启', 'ok');
+  const next = s.next_run_time ? ` · 下次 ${new Date(s.next_run_time).toLocaleString()}` : '';
+  $('pp-sched-plan').textContent = `${s.schedule || '—'}${next}`;
+  $('pp-sched-last').textContent = _schedLastText(s);
+  $('pp-sched-alert').textContent =
+    `告警通道：${s.alert_channel || '—'} · 已发 ${s.alert_count || 0} 条`;
+
+  const box = $('pp-sched-warns');
+  const warns = s.warnings || [];
+  if (warns.length) {
+    box.innerHTML = `<div class="warn-box"><div class="t">⚠️ 定时运行提示</div>
+      <ul>${warns.map((w) => `<li>${esc(w)}</li>`).join('')}</ul></div>`;
+    box.classList.remove('hidden');
+  } else {
+    box.innerHTML = '';
+    box.classList.add('hidden');
+  }
+}
+
+async function paperScheduleRefresh() {
+  try {
+    renderSchedule(await api('/api/paper/schedule?account_id=default'));
+  } catch (e) {
+    _schedSetState('● 状态不明', 'err');
+    $('pp-sched-plan').textContent = `查询定时状态失败：${e.message}`;
+    $('pp-sched-last').textContent = '';
+    $('pp-sched-alert').textContent = '';
+    $('pp-sched-warns').innerHTML = '';
+    $('pp-sched-warns').classList.add('hidden');
+  }
+}
+
+async function paperScheduleAction(path, opts, okMsg) {
+  $('pp-sched-msg').textContent = '处理中…';
+  try {
+    const r = await api(path, opts);
+    if (path.endsWith('/run')) {
+      if (r.status === 'skipped') {
+        $('pp-sched-msg').textContent = `未执行：${r.reason || '非交易日'}`;
+      } else if (r.status === 'error') {
+        $('pp-sched-msg').textContent = `执行失败：${r.error || '未知原因'}`;
+      } else {
+        $('pp-sched-msg').textContent = `已执行 ${r.steps || 0} 步`;
+      }
+    } else {
+      $('pp-sched-msg').textContent = okMsg;
+    }
+  } catch (e) {
+    $('pp-sched-msg').textContent = `失败：${e.message}`;
+    if (/apscheduler/i.test(e.message)) {
+      // 缺依赖是"用不了"，不是"操作失败" —— 按钮禁掉并写明怎么装
+      _schedSetDisabled(true);
+      _schedSetState('● 不可用', 'err');
+      $('pp-sched-plan').textContent =
+        '定时不可用：未安装 apscheduler（pip install "stock-model[schedule]"）';
+    }
+  }
+  await paperScheduleRefresh();
+}
+
+$('pp-sched-start').addEventListener('click', () => {
+  const parts = ($('pp-sched-time').value || '15:30').split(':');
+  paperScheduleAction('/api/paper/schedule', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      account_id: 'default',
+      hour: parseInt(parts[0], 10),
+      minute: parseInt(parts[1], 10),
+      days: 1,
+    }),
+  }, '定时已开启');
+});
+
+$('pp-sched-stop').addEventListener('click', () => {
+  paperScheduleAction(
+    '/api/paper/schedule?account_id=default', { method: 'DELETE' }, '定时已停止',
+  );
+});
+
+$('pp-sched-run').addEventListener('click', () => {
+  paperScheduleAction('/api/paper/schedule/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ account_id: 'default' }),
+  }, '已执行');
+});
+
 async function paperRefresh() {
   try {
     const [acc, pos, trades, eq] = await Promise.all([
@@ -434,9 +569,13 @@ async function paperRefresh() {
       const m = await api('/api/paper/metrics');
       renderPaperMetrics(m);
     } catch (e) { /* 绩效依赖数据量, 失败不阻塞 */ }
+
+    // 定时状态独立刷新: 它失败不该把账户数据也一起判为"加载失败"
+    await paperScheduleRefresh();
   } catch (e) {
     $('pp-warnings').innerHTML =
       `<div class="alert">加载模拟盘数据失败：${esc(e.message)}</div>`;
+    await paperScheduleRefresh();
   }
 }
 

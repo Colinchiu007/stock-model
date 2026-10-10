@@ -41,6 +41,9 @@ data/paper/*
 
 # 端到端验证脚本的 transcript (每次跑都会覆盖)
 experiments/_verify_output.txt
+# UI 验证脚本的产物 (截图 / 服务日志)
+experiments/_ui_shots/
+experiments/_ui_server.log
 
 # Jupyter
 .ipynb_checkpoints/
