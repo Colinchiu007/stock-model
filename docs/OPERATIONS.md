@@ -200,40 +200,7 @@ STOCK_API_TOKEN=change-me-to-a-long-random-string
 | 端口被占 | `Get-NetTCPConnection -LocalPort 8123` | 确认是不是本项目服务再处理；**8000 的 everos 不要动** |
 | 测试/文档数字对不上 | CI 运行结果 | 以 CI 为准，回填时标来源（§4-8） |
 
-## 7. Docker 部署（TD-07）
-
-> ⚠️ **验证状态（如实）**：`docker compose config` 语法/语义校验通过；
-> **容器构建与运行未验证** —— 撰写时本机 Docker 引擎未运行。
-> 首次使用请先跑一遍下面的验证步骤，把结果记回本节。
-
-```powershell
-# 构建并启动(app + fallback 两个容器)
-docker compose up -d --build
-docker compose ps                      # 两容器应 Up; app 应 (healthy)
-curl.exe http://127.0.0.1:8123/api/health   # {"status":"ok"}
-docker compose logs -f app             # 观察启动日志
-
-# 验证兜底(手动触发一次, 不等 19:00):
-docker compose exec fallback python /app/scripts/paper_daily_fallback.py
-# 预期: ✓ 服务已在运行 → 今日已处理/执行结果 → 退出 0
-
-# 验证幂等(再跑一次应秒退):
-docker compose exec fallback python /app/scripts/paper_daily_fallback.py
-```
-
-设计要点：
-- **两个容器**：`app`(uvicorn) + `fallback`(19:00 后执行每日兜底，共用 `./data` 卷)。
-  兜底是进程外保障，分离后 app 崩溃重启不影响兜底节拍
-- **单 worker 红线继承**：容器内 uvicorn 不加 `--workers`
-- **端口**：宿主 `8123` → 容器 `8000`（避开宿主 8000 被 everos 占用）
-- **时区**：`TZ=Asia/Shanghai`（A股调度依赖）
-- **数据**：`./data` 挂载到 `/app/data`，账户状态/节假日表持久化；
-  `docker compose down` 不丢数据
-- **死信开关**：`STOCK_PING_URL` 在两个容器都生效（app 内置调度失败时经 notify；
-  fallback 每日 ping 报平安）——见 §8
-- 中国网络：构建时打开 compose 里的 `PIP_INDEX_URL` 清华镜像注释
-
-## 8b. WebSocket 推送（TD-06，**默认关闭**）
+## 6. WebSocket 推送（TD-06，**默认关闭**）
 
 服务端已就绪：`/ws/paper`（连接即收 welcome；调度器 ok/error/skipped 三出口广播
 `{"type":"paper_status_changed","account_id":...,"status":...}`；前端收到后走既有
@@ -258,7 +225,7 @@ handler 直调（正常）、websockets 版本（13.1 与 17.2 均 403）。
 注意：浏览器与 TestClient 都会把 close 掩盖成 1006/Disconnect，
 **只有原始 socket 能看到真实状态码**。
 
-## 8. 死信开关（TD-10 完整形态）
+## 7. 死信开关（TD-10 完整形态）
 
 前四层保障都跑在**这台机器上**——机器彻底关机/断网时全部失效。
 死信开关（healthchecks.io 模式）补上这块：
@@ -272,9 +239,10 @@ handler 直调（正常）、websockets 版本（13.1 与 17.2 均 403）。
 实现：`scripts/watchdog_ping.py`（ping 失败绝不影响兜底退出码，但打日志）。
 测试：`tests/test_watchdog_ping.py`（6 条）+ 接线测试（4 条）。
 
-## 6. 变更记录
+## 8. 变更记录
 
 - 2026-10-10：首版。覆盖 §1–§5 全部命令，均在本会话实测（来源见各节标注）。
-- 2026-10-10：新增 §7 Docker 部署（**容器构建未验证**，见节内说明）、§8 死信开关（§1 兜底已接入 ping，实测跳过路径）。
+- 2026-10-10：新增 §8 死信开关（§1 兜底已接入 ping，实测跳过路径）。
+- 2026-10-10（晚）：**移除 Docker 交付**（TD-07 回到待办）——经确认，全部功能在本机部署形态下完整可用，Docker 只服务「换机/上云」场景，而容器从未构建验证过，留着是信任负担。原 Dockerfile/compose 可在 git 历史（PR #30）找回。
 - 2026-10-10：§6 预期测试数改为「以 CI 为准」。
 - 2026-10-10：新增 §3b 仪表盘认证（默认关，配置即强制；公网部署前必设）。
