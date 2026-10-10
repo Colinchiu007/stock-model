@@ -115,6 +115,38 @@ warn_unused_configs = true
 4. **教训入档**：本轮另一个坑（用 stub 模拟 CI 环境得到的数字与真实 CI 不一致）也写进 HANDOVER 5.2 ——
    **模拟环境能确认"不会失败"，不能用来写文档里的数字**
 
+## ⑤-b 补充：门禁接入 CI 后立刻暴露的第三个坑
+
+第一次推送后 **CI 的 Lint 挂了** —— 本地 mypy 是绿的，CI 多出 3 个错误：
+
+```
+src/stock_model/data/fetcher.py:215: error: Cannot assign to a method  [method-assign]
+src/stock_model/data/fetcher.py:215: error: Incompatible types in assignment  [assignment]
+src/stock_model/data/fetcher.py:216: error: "type[Session]" has no attribute "_trust_env_patched"  [attr-defined]
+```
+
+**根因：`ignore_missing_imports` 只豁免「缺少类型信息」，不豁免「类型信息在场时的真实错误」。**
+
+- 本地 `requests` 不带 `py.typed` → `Session` 是 `Any` → monkey-patch 不报错
+- CI 的 `requests 2.34.2` **自带 `py.typed`** → `Session` 是真类型 → 同一段代码被真检查
+
+（CI 里其实**没有**装 `types-requests`；是同源问题的另一种表现：
+**CI 装的是不带上限的最新依赖** —— 那次 CI 是 `pandas 3.0.6` / 本地 `2.3.3`。）
+
+修复：`fetcher.py` 的 monkey-patch 是**有意为之**（禁系统代理，akshare 需要），
+三个错误是补丁的必然结果而非缺陷，故按错误码精确豁免：
+
+```python
+requests.Session.__init__ = _patched_init  # type: ignore[method-assign, assignment]
+requests.Session._trust_env_patched = True  # type: ignore[attr-defined]
+```
+
+选按错误码豁免而不是整段 `# type: ignore`：这样将来补丁引入**其它**类型问题时仍会报出来。
+该写法对环境是稳健的 —— 本地没有 stub 时 ignore 用不上，而 `warn_unused_ignores` 未开启，不会误报。
+
+**这条本身也进了预防措施**（HANDOVER 5.2）：本地 mypy 全绿 ≠ CI 全绿，
+因为 CI 的依赖版本与本地不同。**mypy 门禁以 CI 为准。**
+
 ---
 
 # 发现 B：组合优化返回 200 + 空组合

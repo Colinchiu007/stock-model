@@ -115,6 +115,12 @@ warn_unused_configs = true
 #   1) 上游没有 py.typed、PyPI 也无官方 stub —— 只能豁免
 #   2) 有官方 stub 包但未安装（装 types-* 即可收紧，属后续优化，不在本次范围）
 #   3) CI 不装的可选依赖（rl / ta extra）—— 由 tests 用 importorskip 兜住
+#
+# ⚠️ 一个容易误判的点：``ignore_missing_imports`` 只豁免「**缺少**类型信息」，
+# **不**豁免「类型信息在场时的真实错误」。所以同一个 mypy 命令在不同依赖环境下
+# 结果可能不同 —— 实测踩过：本地 requests 无 py.typed(不打补丁代码不报错)，
+# CI 的 requests 2.34+ 自带 py.typed，于是 fetcher.py 的 monkey-patch 被真检查、
+# 多出 3 个错误。这类差异不是 bug，但意味着 **mypy 门禁以 CI 为准**。
 [[tool.mypy.overrides]]
 module = [
     # 1) 上游无类型信息

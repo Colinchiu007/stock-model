@@ -299,6 +299,11 @@ pip install -e ".[dev]"
    - ⚠️ **mypy 需要依赖在场**：缺依赖时它只会报一堆 "Cannot find implementation"，
      看着跑了其实没查。所以 Lint job 会 `pip install -e ".[dev,quant,schedule,web]"`，
      本地验证也应保持同一套依赖
+   - ⚠️ **`ignore_missing_imports` 只豁免「缺少」类型信息，不豁免「类型信息在场时的真实错误」。**
+     实测踩过（2026-10-10）：本地 `requests` 无 `py.typed`，`fetcher.py` 的 monkey-patch
+     不报错；CI 的 `requests 2.34+` 自带 `py.typed`，同样的代码多出 3 个错误。
+     同源问题还有 **CI 装的是不带上限的最新依赖**（那次 CI 是 `pandas 3.0.6`，本地 `2.3.3`）。
+     ⇒ **本地 mypy 全绿 ≠ CI 全绿；mypy 门禁一律以 CI 为准**（ruff 版本差异同理，已栽多次）
    - 无 optional 依赖的环境（只装 `.[dev,quant]`）是 CI 主 job 的真实状态，
      **推送前应模拟**（`pip uninstall apscheduler fastapi starlette` 后跑）
    - 不想动环境也可以用 stub 模块挡在 `PYTHONPATH` 前面。⚠️ 但 stub 只挡你列出的包，
