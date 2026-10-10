@@ -233,6 +233,31 @@ docker compose exec fallback python /app/scripts/paper_daily_fallback.py
   fallback 每日 ping 报平安）——见 §8
 - 中国网络：构建时打开 compose 里的 `PIP_INDEX_URL` 清华镜像注释
 
+## 8b. WebSocket 推送（TD-06，**默认关闭**）
+
+服务端已就绪：`/ws/paper`（连接即收 welcome；调度器 ok/error/skipped 三出口广播
+`{"type":"paper_status_changed","account_id":...,"status":...}`；前端收到后走既有
+REST 刷新）。逻辑有单测锁（`tests/test_paper_ws.py`）。
+
+⚠️ **默认关闭**（`PAPER_WS_ENABLED=1` 开启）：本机环境握手被 close 1008，
+根因未定位（纯 FastAPI 对照正常，已排除 auth 中间件/路由匹配/websockets 版本）。
+**开启前必须验证**（原始 socket，不依赖浏览器/TestClient）：
+
+```python
+# 验证脚本要点（完整版见 git 历史 PR 描述）：握手必须 101，随后能读到 welcome 帧
+import socket, base64, os
+s = socket.create_connection(("127.0.0.1", 8123), timeout=5)
+key = base64.b64encode(os.urandom(16)).decode()
+s.sendall((f"GET /ws/paper HTTP/1.1\r\nHost: 127.0.0.1:8123\r\nUpgrade: websocket\r\n"
+           f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n").encode())
+print(s.recv(200).decode().splitlines()[0])   # 必须 HTTP/1.1 101 Switching Protocols
+```
+
+排查时已排除：auth 中间件（二分禁用后仍 1008）、路由匹配（Match.FULL）、
+handler 直调（正常）、websockets 版本（13.1 与 17.2 均 403）。
+注意：浏览器与 TestClient 都会把 close 掩盖成 1006/Disconnect，
+**只有原始 socket 能看到真实状态码**。
+
 ## 8. 死信开关（TD-10 完整形态）
 
 前四层保障都跑在**这台机器上**——机器彻底关机/断网时全部失效。

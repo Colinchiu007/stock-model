@@ -137,6 +137,9 @@ class PaperScheduler:
         self._runner: Callable[[str, int], dict[str, Any]] | None = None
         self._alerter: Callable[[str], None] | None = None
         self._alerter_description = ""
+        # 变更监听器(TD-06): 状态变化时回调(account_id, status)。
+        # 调度器不认识 WebSocket —— 与 set_alerter 同模式, 只负责"变了就叫一下"。
+        self._change_listener: Callable[[str, str], None] | None = None
         # 连续失败时每 N 次再提醒一次(首次必提醒); 0 = 只提醒首次
         self._alert_every = max(0, int(alert_every_n_failures))
         self._lock = threading.RLock()
@@ -169,6 +172,24 @@ class PaperScheduler:
         self._alerter_description = description
         if every_n_failures is not None:
             self._alert_every = max(0, int(every_n_failures))
+
+    def set_change_listener(self, listener: Callable[[str, str], None] | None) -> None:
+        """注入**状态变更**监听器: ``listener(account_id, status)``
+
+        ok/error/skipped 三个出口都会触发; 没有监听器时完全无开销。
+        与 set_alerter 同模式: 调度器不认识 WebSocket, 只负责叫一声。
+        """
+        self._change_listener = listener
+
+    def _notify_change(self, account_id: str, status: str) -> None:
+        """触发变更监听; **绝不抛** —— 推送失败不能影响调度结果"""
+        listener = self._change_listener
+        if listener is None:
+            return
+        try:
+            listener(account_id, status)
+        except Exception as e:
+            logger.error(f"[paper-schedule] 变更通知失败: {e}")
 
     # ==================== 时区 ====================
 
@@ -481,6 +502,7 @@ class PaperScheduler:
                 state.last_result = {"status": "skipped", "date": now.date().isoformat()}
                 reason = "非交易日(周末或节假日)"
                 logger.info(f"[paper-schedule] 账户 {account_id} {now.date()} {reason}, 跳过")
+                self._notify_change(account_id, "skipped")
                 return {"status": "skipped", "reason": reason, "date": now.date().isoformat()}
 
             if state.trigger_type == "daily" and now.hour < MARKET_CLOSE_HOUR:
@@ -535,6 +557,7 @@ class PaperScheduler:
                     f"此前连续失败: {was_failing} 次\n"
                     f"本次结果: {result.get('steps', 0)} 步, 成交 {result.get('trades', 0)} 笔",
                 )
+            self._notify_change(account_id, "ok")
             return {"status": "ok", "account_id": account_id, **state.last_result}
 
     def _record_failure(
@@ -570,6 +593,7 @@ class PaperScheduler:
                 f"原因: {state.last_error}\n"
                 f"排查: GET /api/paper/schedule?account_id={state.account_id}",
             )
+        self._notify_change(state.account_id, "error")
         return {"status": "error", "account_id": state.account_id, "error": state.last_error}
 
     def _alert(self, state: ScheduleState, now: datetime, message: str) -> None:
