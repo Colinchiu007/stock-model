@@ -142,44 +142,48 @@ class TestDataSourceBase:
 
 
 class TestConnectionErrorDetection:
-    """连接错误检测测试"""
+    """连接错误检测测试
+
+    2026-10-11: `_is_connection_error` 改为 staticmethod(加入 RetryError 解包语义),
+    调用签名从 (None, err) 改为 (err) —— 旧写法是把 None 当 self 占位。
+    """
 
     def test_connection_error_pattern(self):
         """ConnectionError可被检测"""
         err = ConnectionError("Connection refused")
-        assert StockDataFetcher._is_connection_error(None, err) is True
+        assert StockDataFetcher._is_connection_error(err) is True
 
     def test_remote_disconnected(self):
         """RemoteDisconnected可被检测"""
         from http.client import RemoteDisconnected
 
         err = RemoteDisconnected("Remote end closed connection without response")
-        assert StockDataFetcher._is_connection_error(None, err) is True
+        assert StockDataFetcher._is_connection_error(err) is True
 
     def test_proxy_error(self):
         """ProxyError可被检测 (包含Max retries exceeded)"""
         err = Exception("Max retries exceeded with url: /api/test")
-        assert StockDataFetcher._is_connection_error(None, err) is True
+        assert StockDataFetcher._is_connection_error(err) is True
 
     def test_ssl_error(self):
         """SSLError可被检测"""
         err = Exception("SSLError: SSL handshake failed")
-        assert StockDataFetcher._is_connection_error(None, err) is True
+        assert StockDataFetcher._is_connection_error(err) is True
 
     def test_non_connection_error(self):
         """非连接错误不触发降级"""
         err = ValueError("Invalid stock code")
-        assert StockDataFetcher._is_connection_error(None, err) is False
+        assert StockDataFetcher._is_connection_error(err) is False
 
     def test_runtime_error_not_connection(self):
         """RuntimeError不是连接错误"""
         err = RuntimeError("Data processing failed")
-        assert StockDataFetcher._is_connection_error(None, err) is False
+        assert StockDataFetcher._is_connection_error(err) is False
 
     def test_key_error_not_connection(self):
         """KeyError不是连接错误"""
         err = KeyError("Missing column: close")
-        assert StockDataFetcher._is_connection_error(None, err) is False
+        assert StockDataFetcher._is_connection_error(err) is False
 
 
 class TestCreateSource:

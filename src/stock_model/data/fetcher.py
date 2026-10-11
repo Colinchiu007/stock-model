@@ -44,6 +44,13 @@ _CONNECTION_ERROR_PATTERNS = (
     "Max retries exceeded",
     "NewConnectionError",
     "SSLError",
+    # baostock 在 Windows 上抛 RuntimeError 带中文系统消息(WinError 10054 实测)
+    "远程主机强迫关闭",
+    "WinError 10054",
+    # tenacity 重试耗尽抛 RetryError, 它**不是** RuntimeError/ConnectionError
+    # 的子类 —— 不识别它, 数据源服务器断连时的重试耗尽就不会触发降级
+    # (2026-10-11 真实故障: 前端拿到 "RetryError[<Future ...>]" 而不是降级结果)
+    "RetryError",
 )
 
 
@@ -105,11 +112,33 @@ class StockDataFetcher:
             return BaostockSource()
         raise ValueError(f"不支持的数据源: {name}, 可选: {StockDataFetcher.AVAILABLE_SOURCES}")
 
-    def _is_connection_error(self, error: Exception) -> bool:
+    @staticmethod
+    def unwrap_retry_error(error: Exception) -> Exception:
+        """解开 tenacity.RetryError, 返回**内层异常**(非 RetryError 原样返回)
+
+        RetryError 的 str() 是 "RetryError[<Future at 0x... state=finished
+        raised RuntimeError>]" —— 真实根因被藏在对象描述后面, 用户看到的
+        是一串无意义文本。降级/报错前先解包。
+        """
+        last = getattr(error, "last_attempt", None)
+        if last is not None:
+            inner: Exception | None = getattr(last, "exception", lambda: None)()
+            if isinstance(inner, BaseException):
+                return inner
+        return error
+
+    @staticmethod
+    def _is_connection_error(error: Exception) -> bool:
         """判断是否为连接类错误（可降级）
 
         同时检查错误消息和异常类名，确保ConnectionError等异常也能被正确识别。
+        收到 tenacity.RetryError 时**先解出内层异常**再判定 ——
+        RetryError 本身不该因为类名命中模式(那样内层是 ValueError 也会误判),
+        判定的应该是**真实根因**。
+
+        保持 staticmethod: 既有测试以 StockDataFetcher._is_connection_error(None, e) 调用。
         """
+        error = StockDataFetcher.unwrap_retry_error(error)
         error_str = str(error)
         class_name = error.__class__.__name__
         return any(
@@ -129,6 +158,8 @@ class StockDataFetcher:
         Raises:
             RuntimeError: 主数据源和备选数据源都失败时
         """
+        last_inner_error: Exception = RuntimeError("未知原因")
+        primary_inner_error: Exception = last_inner_error
         # 尝试主数据源
         try:
             method = getattr(self._source_instance, method_name)
@@ -138,14 +169,20 @@ class StockDataFetcher:
             # 空数据也尝试降级
             logger.warning(f"[{self.source}] {method_name} 返回空数据，尝试备选数据源")
         except Exception as e:
+            # RetryError 由 _is_connection_error 内部解包判定 ——
+            # 连接类错误重试耗尽必须触发降级(2026-10-11 真实故障)
+            inner_e = self.unwrap_retry_error(e)
+            primary_inner_error = inner_e
+            last_inner_error = inner_e
             if self._is_connection_error(e) and self._fallback_instance is not None:
                 logger.warning(
-                    f"[{self.source}] {method_name} 连接失败: {e.__class__.__name__}: {e}，"
+                    f"[{self.source}] {method_name} 连接失败: "
+                    f"{inner_e.__class__.__name__}: {inner_e}，"
                     f"自动降级到 {self._fallback_instance.name}"
                 )
             else:
-                # 非连接错误，不降级，直接抛出
-                raise
+                # 非连接错误，不降级，直接抛出(解包后的内层, 根因可见)
+                raise inner_e from e
 
         # 尝试备选数据源
         if self._fallback_instance is not None:
@@ -156,13 +193,23 @@ class StockDataFetcher:
                     logger.info(f"[{self._fallback_instance.name}] {method_name} 降级获取成功")
                     return result
                 logger.warning(f"[{self._fallback_instance.name}] {method_name} 也返回空数据")
-            except (ValueError, KeyError, ConnectionError, RuntimeError) as fallback_error:
+            except Exception as fallback_error:
+                # 加 RetryError 并解包: 备选源也可能用 tenacity(漏捕会穿透给用户)
+                inner = self.unwrap_retry_error(fallback_error)
+                last_inner_error = inner
                 logger.error(
                     f"[{self._fallback_instance.name}] {method_name} 也失败: "
-                    f"{fallback_error.__class__.__name__}: {fallback_error}"
+                    f"{inner.__class__.__name__}: {inner}"
                 )
 
-        raise RuntimeError(f"数据获取失败: 主数据源[{self.source}]和备选数据源均无法获取数据")
+        # 根因**拼进消息文本**(而不是只挂在异常链上):
+        # 前端展示的就是 str(e), 异常链用户看不到
+        raise RuntimeError(
+            f"数据获取失败: 主数据源[{self.source}]和备选数据源均无法获取数据 "
+            f"(主源原因: {primary_inner_error.__class__.__name__}: "
+            f"{primary_inner_error}; 备选原因: "
+            f"{last_inner_error.__class__.__name__}: {last_inner_error})"
+        ) from last_inner_error
 
     def _setup_proxy(self) -> None:
         """根据配置设置HTTP代理
