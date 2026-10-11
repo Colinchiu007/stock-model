@@ -117,6 +117,7 @@ class Settings(BaseSettings):
         env_prefix="STOCK_",
         env_file=".env",
         env_file_encoding="utf-8",
+        extra="ignore",  # 子模型(DataSettings 等)的前缀变量出现在 .env 里不该炸顶层
     )
 
     # 环境
