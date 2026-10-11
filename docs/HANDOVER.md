@@ -613,6 +613,10 @@ python experiments/run_trend_filter_test.py      # 趋势过滤器效果
 2. ~~把定时运行打开~~ → **已于 2026-10-11 上线**：兜底实测拉起服务+补配置，
    非交易日正确 skipped；服务保留运行中，内置调度待首个交易日（10-12 周一 15:30）；
    harness 侧的每日兜底（19:00）由用户配置。**观察期从现在开始**
+   ├─ 首跑前最后验证（2026-10-11）：APScheduler 的 CronTrigger 在真实时钟下
+   │    确实被触发（experiments/verify_scheduler_clock.py）—— 补上了"会被时钟
+   │    触发"这个从未真实发生过的组合，明天 15:30 走同一链路
+   └─ 周一 15:30 后的核对命令见 OPERATIONS §0b
    ├─ **直接在模拟盘 Tab 上点「开启定时」**（2026-10-10 起有界面了，不必再 curl），
    │    或 POST /api/paper/schedule（默认每交易日 15:30）
    ├─ 卡片上就能看到 下次执行时间 / 上次成败原因 / 告警通道 / warnings

@@ -35,6 +35,22 @@ python scripts/pre_launch_check.py   # 退出码 0 = 全部通过
 非交易日正确 `skipped` 退 0。**首个真实交易日 = 2026-10-12（周一）15:30**，
 观察期开始（HANDOVER 第三节：积累 ≥20 笔成交前不评估策略）。
 
+**首跑前最后验证（2026-10-11）**：`python experiments/verify_scheduler_clock.py`
+—— APScheduler 的 CronTrigger 在**真实时钟**下被触发（此前所有验证都是
+手动/HTTP 驱动，"会被时钟触发"这个组合从未真实发生过）。实测：分钟点
+13:05:00.012 精确命中，next_run_time 自算正确。明天的 15:30 走同一链路。
+
+**周一 15:30 后的核对命令**（按顺序）：
+
+```powershell
+python scripts/paper_status.py     # 上次应为 ✅ ok(或 ❌ error + last_error)
+```
+
+- ✅ ok → 观察期正常运转，每天看一眼即可
+- ⏭️ skipped → 检查假日历（不该发生在周一）
+- ❌ error → 先看 `last_error`；数据源问题居多（akshare/baostock 降级链已内置）
+- 什么都没发生（last_run_at 仍是周日）→ 查服务进程是否活着（§5 第一行）
+
 ## 1. 每日兜底脚本（给 harness 定时任务调用）
 
 ### 1.1 定时任务配置
