@@ -256,3 +256,39 @@ GET /api/portfolio/optimize?symbols=000001&method=risk_parity
 | 其中质量门禁锁 | 0 | 8 |
 | 覆盖率 | 85% | 85%（README 原写 81%，已修正） |
 | 端到端重启验证 | 通过（见 HANDOVER 4.2） | 不变 |
+
+
+---
+
+## 附：2026-10-11 用户实测故障 —— RetryError 穿透数据层降级链
+
+> 用户在前端点「个股分析」(000001) → `{"error": "RetryError: RetryError[<Future at 0x...>]"}`；
+> 服务端日志同刻 3 次 `[WinError 10054] 远程主机强迫关闭连接`（baostock 周末不稳）。
+
+### ① 根因溯源
+三层叠加：
+1. tenacity 重试耗尽抛 `RetryError`，**不是** RuntimeError/ConnectionError 子类
+2. `_CONNECTION_ERROR_PATTERNS` 里没有 `RetryError` 类名，也**没有中文 WinError 文本**
+   （baostock 在 Windows 抛的是 `RuntimeError("远程主机强迫关闭…")`——中文！）
+3. `screener.analyze` 显式 `data_source="baostock"`，**baostock 无备选源** → 降级链根本不存在
+
+### ② 逃逸链
+写测试时代码作者（我）只在 akshare 场景想降级；baostock-as-primary 的场景
+（screener 的默认参数）从未被测试覆盖。**"默认参数"路径同样需要测试。**
+
+### ③ 系统性漏洞
+「**错误文本匹配英文模式**」—— Windows 中文系统消息（`远程主机强迫关闭`）
+永远匹配不上英文模式表。本项目用户环境是中文 Windows，这类匹配必须考虑中文。
+
+### ④ 修复 + 回归保护（6 条测试，tests/test_retry_error_fallback.py）
+- `_CONNECTION_ERROR_PATTERNS` 加 `RetryError`（类名）与中文 WinError 文本
+- `_is_connection_error` 收到 RetryError **先解包再判定**（内层 ValueError 不误判）
+- `unwrap_retry_error` 静态助手：解出内层异常（RetryError 的 str 藏真实根因）
+- 降级链尾部 raise **把主源/备选双根因拼进消息文本**（前端显示的就是 str）
+- 备选源 except 从 4 类元组改为全捕 + 解包（备选也可能用 tenacity）
+
+### ⑤ 预防
+- 接口签名变更的**连带测试同步**：`_is_connection_error` 改 staticmethod 后，
+  7 个旧测试以 `(None, err)` 调用全崩 —— 已同步并注明原因
+- **教训复述**：模式匹配要覆盖用户环境的语言；`str(RetryError)` 不可读，
+  一切给用户的错误必须解包到根因
