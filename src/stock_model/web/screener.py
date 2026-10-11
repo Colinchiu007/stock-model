@@ -114,8 +114,12 @@ def _analyze_one(
 def register_screener_routes(app: Any) -> None:
     """把选股相关路由挂到 FastAPI app 上"""
 
+    # 以下三个端点都是**同步阻塞**(内部拉真实行情, 数十秒):
+    # 必须用 `def` 而非 `async def` —— FastAPI 会把 def 端点丢进线程池,
+    # async def 则直接在事件循环上执行, 同步 IO 会**冻结整个事件循环**,
+    # 期间所有请求(含其它用户的)全部排队(实测: 扫描时点停止挂 10s+)。
     @app.get("/api/screener")
-    async def screener(
+    def screener(
         symbols: str = "000001,000002,600036,000651,600519",
         data_source: str = "baostock",
         start_date: str = "20240101",
@@ -176,7 +180,7 @@ def register_screener_routes(app: Any) -> None:
         }
 
     @app.get("/api/analyze/{symbol}")
-    async def analyze_detail(
+    def analyze_detail(
         symbol: str,
         data_source: str = "baostock",
         start_date: str = "20240101",
@@ -255,7 +259,7 @@ def register_screener_routes(app: Any) -> None:
             return {"symbol": symbol, "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
     @app.get("/api/backtest/{symbol}")
-    async def backtest_detail(
+    def backtest_detail(
         symbol: str,
         data_source: str = "baostock",
         start_date: str = "20240101",
