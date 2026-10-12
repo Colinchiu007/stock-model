@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import threading
 from datetime import datetime
 
@@ -44,6 +45,19 @@ class BaostockSource(DataSource):
     _lock = threading.Lock()
     _logged_in = False
 
+    # 连接类错误模式: 命中即认为**会话可能已失效**(而非数据问题) ——
+    # baostock 会话长时间不用会被服务端踢掉, 此时 _logged_in 仍为 True,
+    # 查询走死连接报 WinError 10054。必须在查询层自愈(重登后重试),
+    # 否则长驻进程(如 web 服务)会永远失败(2026-10-12 实测: 服务活了 29h,
+    # 脚本新进程能跑、服务不能跑, 根因就是类变量记住了过期的登录态)。
+    _SESSION_DEAD_PATTERNS = (
+        "远程主机强迫关闭",
+        "WinError 10054",
+        "ConnectionError",
+        "RemoteDisconnected",
+        "Connection reset",
+    )
+
     def __init__(self) -> None:
         self._ensure_login()
 
@@ -65,6 +79,48 @@ class BaostockSource(DataSource):
                 bs.logout()
                 BaostockSource._logged_in = False
                 logger.info("baostock已登出")
+
+    def _relogin(self) -> None:
+        """强制重置登录态并重新登录(线程安全)"""
+        with BaostockSource._lock:
+            with contextlib.suppress(Exception):  # logout 失败不阻碍重登
+                bs.logout()
+            BaostockSource._logged_in = False
+            lg = bs.login()
+            if lg.error_code != "0":
+                raise ConnectionError(f"baostock重新登录失败: {lg.error_code} {lg.error_msg}")
+            BaostockSource._logged_in = True
+            logger.info("baostock会话失效, 已重新登录")
+
+    def _is_session_dead(self, error: Exception) -> bool:
+        """判断异常是否由"会话失效"引起(连接类错误)"""
+        text = str(error)
+        return any(p in text for p in BaostockSource._SESSION_DEAD_PATTERNS)
+
+    def _query_with_selfheal(self, query_fn):
+        """执行 baostock 查询, 遇会话失效自动重登并重试一次
+
+        为什么必须自愈: ``_logged_in`` 是**类变量**, login 一次后永久 True。
+        baostock 会话长时间不用会被服务端踢掉, 之后查询走死连接报
+        WinError 10054(远程主机强迫关闭)。长驻进程(web 服务)会因此
+        **永远失败** —— 2026-10-12 实测: 同一 fetcher 在新进程里成功、
+        在活了 29h 的服务里失败, 根因即此。
+
+        Returns:
+            query_fn() 的返回值(成功时)
+        Raises:
+            最后一次的真实异常(重登/重试都失败时; 不是 RetryError)
+        """
+        try:
+            return query_fn()
+        except Exception as e:
+            if not self._is_session_dead(e):
+                raise
+            logger.warning(
+                f"baostock查询遇连接错误({type(e).__name__}), 判定会话失效, 尝试重登重试"
+            )
+            self._relogin()
+            return query_fn()  # 重登后再试一次; 仍失败则抛真实异常给上层
 
     @staticmethod
     def _convert_symbol(symbol: str) -> str:
@@ -131,13 +187,15 @@ class BaostockSource(DataSource):
         end = self._normalize_date(end_date) or "2099-12-31"
         logger.debug(f"[baostock] 获取日线: {bs_symbol}, {start} ~ {end}")
 
-        rs = bs.query_history_k_data_plus(
-            bs_symbol,
-            "date,open,high,low,close,volume,amount,turn,pctChg",
-            start_date=start,
-            end_date=end,
-            frequency="d",
-            adjustflag=adjust_flag,
+        rs = self._query_with_selfheal(
+            lambda: bs.query_history_k_data_plus(
+                bs_symbol,
+                "date,open,high,low,close,volume,amount,turn,pctChg",
+                start_date=start,
+                end_date=end,
+                frequency="d",
+                adjustflag=adjust_flag,
+            )
         )
 
         if rs.error_code != "0":
