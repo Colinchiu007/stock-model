@@ -30,6 +30,21 @@ def get(port: int, path: str, timeout: int = 10):
         return json.loads(r.read().decode("utf-8"))
 
 
+def _trades_count(port: int) -> int:
+    """成交笔数 —— **必须**从 /api/paper/trades 拿
+
+    /api/paper/account 没有 trades/total_trades 字段(只有 cash/total_asset/
+    trading_days 等) —— 曾按臆测字段读, 导致实际 2 笔成交却显示"成交 0 笔"
+    (2026-10-13 实测 bug)。trades 接口失败时降级为 0(观察工具不因单接口挂而崩)。
+    """
+    try:
+        data = get(port, "/api/paper/trades?account_id=default", timeout=60)
+    except Exception:
+        return 0
+    trades = data.get("trades")
+    return len(trades) if isinstance(trades, list) else int(data.get("total") or 0)
+
+
 def main() -> int:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8123
     try:
@@ -79,11 +94,11 @@ def main() -> int:
     ret = acc.get("total_return", 0) * 100
     print(f"账户: 总资产 ¥{acc.get('total_asset', 0):,.2f} ({ret:+.2f}%)"
           f" | 现金 ¥{acc.get('cash', 0):,.2f}")
-    print(f"      成交 {acc.get('total_trades', acc.get('trades', 0))} 笔"
+    trades = _trades_count(port)
+    print(f"      成交 {trades} 笔"
           f" | 交易日 {acc.get('trading_days', 0)} 天")
 
     # 观察期标尺
-    trades = acc.get("total_trades", acc.get("trades", 0))
     if trades < 20:
         print(f"观察期: {trades}/20 笔 —— 未达标前不评估策略(HANDOVER 第三节)")
     else:
