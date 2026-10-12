@@ -323,7 +323,7 @@ class StockDataFetcher:
 
     # ==================== 行情数据 ====================
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
     def get_daily(
         self,
         symbol: str,
@@ -350,7 +350,7 @@ class StockDataFetcher:
         logger.debug(f"获取到 {len(df)} 条日线数据")
         return df
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
     def get_weekly(
         self,
         symbol: str,
@@ -364,7 +364,7 @@ class StockDataFetcher:
             "get_weekly", symbol, start_date=start_date, end_date=end_date, adjust=adjust
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
     def get_monthly(
         self,
         symbol: str,
@@ -378,7 +378,7 @@ class StockDataFetcher:
             "get_monthly", symbol, start_date=start_date, end_date=end_date, adjust=adjust
         )
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
     def get_realtime(self, symbol: str) -> pd.DataFrame:
         """
         获取实时行情
@@ -394,13 +394,13 @@ class StockDataFetcher:
 
     # ==================== 基本面数据 ====================
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
     def get_stock_info(self, symbol: str) -> pd.DataFrame:
         """获取股票基本信息"""
         logger.debug(f"获取股票信息: {symbol}")
         return self._execute_with_fallback("get_stock_info", symbol)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
     def get_financial_summary(self, symbol: str) -> pd.DataFrame:
         """获取财务摘要数据
 
@@ -411,7 +411,7 @@ class StockDataFetcher:
         logger.debug(f"获取财务摘要: {symbol}")
         return self._execute_with_fallback("get_financial_summary", symbol)
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
     def get_valuation(self, symbol: str) -> pd.DataFrame:
         """获取估值数据(PE/PB/PS/ROE等)
 
@@ -424,13 +424,13 @@ class StockDataFetcher:
 
     # ==================== 板块数据 ====================
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
     def get_sector_list(self) -> pd.DataFrame:
         """获取行业板块列表"""
         logger.debug("获取行业板块列表")
         return self._execute_with_fallback("get_sector_list")
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(min=1, max=10), reraise=True)
     def get_sector_stocks(self, sector: str) -> pd.DataFrame:
         """获取板块成分股"""
         logger.debug(f"获取板块成分股: {sector}")
