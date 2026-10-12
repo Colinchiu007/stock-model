@@ -47,6 +47,11 @@ _CONNECTION_ERROR_PATTERNS = (
     # baostock 在 Windows 上抛 RuntimeError 带中文系统消息(WinError 10054 实测)
     "远程主机强迫关闭",
     "WinError 10054",
+    # baostock 错误码 10002007「网络接收错误」: 服务端/网络抖动时返回
+    # (2026-10-13 凌晨实测: baostock login 直接返回它, 整个模拟盘瘫痪) ——
+    # 与 baostock_source._SESSION_DEAD_PATTERNS 保持同源, 两边都要能识别。
+    "10002007",
+    "网络接收错误",
     # tenacity 重试耗尽抛 RetryError, 它**不是** RuntimeError/ConnectionError
     # 的子类 —— 不识别它, 数据源服务器断连时的重试耗尽就不会触发降级
     # (2026-10-11 真实故障: 前端拿到 "RetryError[<Future ...>]" 而不是降级结果)
@@ -88,20 +93,23 @@ class StockDataFetcher:
         )
 
     def _init_sources(self) -> None:
-        """初始化数据源实例"""
+        """初始化数据源实例(双向自动降级)
+
+        两个方向都要能降级 —— 2026-10-13 凌晨实测教训: 账户落盘
+        data_source=baostock, baostock 整体抖动(login 挂起/10002007)时,
+        即使 akshare 可用也切不过去(原来只有 akshare→baostock 一个方向),
+        整个模拟盘瘫痪。备选源初始化失败(缺依赖/网络)不阻断主源可用性。
+        """
         self._source_instance = self._create_source(self.source)
 
-        # 自动降级: 如果主数据源是akshare，备选为baostock
-        if self.source == "akshare":
-            try:
-                self._fallback_instance = BaostockSource()
-                logger.info("备选数据源: baostock (自动降级已启用)")
-            except (ImportError, RuntimeError, OSError) as e:
-                logger.warning(f"baostock备选数据源初始化失败: {e}")
-                self._fallback_instance = None
-        elif self.source == "baostock":
+        # 备选源 = 另一个可用源(与主源不同)
+        fallback_name = "baostock" if self.source == "akshare" else "akshare"
+        try:
+            self._fallback_instance = self._create_source(fallback_name)
+            logger.info(f"备选数据源: {fallback_name} (自动降级已启用)")
+        except (ImportError, RuntimeError, OSError) as e:
+            logger.warning(f"{fallback_name}备选数据源初始化失败: {e}")
             self._fallback_instance = None
-            logger.info("baostock作为主数据源，无备选")
 
     @staticmethod
     def _create_source(name: str) -> DataSource:
