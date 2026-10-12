@@ -242,7 +242,7 @@ class PaperScheduler:
         days = max(1, int(days))
 
         with self._lock:
-            state = self._states.get(account_id) or ScheduleState(account_id=account_id)
+            state = self._states.get(account_id) or self._new_state_inheriting_stats(account_id)
 
             if interval_minutes is not None:
                 interval_minutes = int(interval_minutes)
@@ -661,6 +661,28 @@ class PaperScheduler:
         "last_alert_at",
         "last_alert_error",
     )
+
+    def _new_state_inheriting_stats(self, account_id: str) -> ScheduleState:
+        """新建状态, 但**继承磁盘上已有的运行统计**
+
+        为什么不直接 ScheduleState(): start() 会 _save_config() 落盘。
+        若内存里没有该账户状态(重启后第一次 start), 直接新建全 0 状态会
+        把磁盘上的历史统计**覆盖成 0** —— 兜底脚本随后读到 last_run_at=''
+        认为"今天没跑过", 再推进一个交易日(重复撮合风险)。
+        实测: 2026-10-13 重启后 start 抹掉了 23:30 那次真实运行的统计。
+        """
+        state = ScheduleState(account_id=account_id)
+        cfg = self._load_config().get(account_id) or {}
+        if isinstance(cfg, dict):
+            for k in self._STAT_KEYS:
+                if k in cfg:
+                    setattr(state, k, cfg[k])
+            if cfg.get("run_count"):
+                logger.info(
+                    f"[paper-schedule] 账户 {account_id} 继承已有运行统计: "
+                    f"run_count={state.run_count} last_status={state.last_status or '—'}"
+                )
+        return state
 
     def _save_config(self) -> None:
         jobs = {
