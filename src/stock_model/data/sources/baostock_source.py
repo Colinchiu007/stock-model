@@ -50,9 +50,15 @@ class BaostockSource(DataSource):
     # 查询走死连接报 WinError 10054。必须在查询层自愈(重登后重试),
     # 否则长驻进程(如 web 服务)会永远失败(2026-10-12 实测: 服务活了 29h,
     # 脚本新进程能跑、服务不能跑, 根因就是类变量记住了过期的登录态)。
+    #
+    # 10002007「网络接收错误」: baostock 服务端/网络抖动也会返回这个错误码
+    # (2026-10-12 22:10 实测: 批量扫描 5 只里 2 只报它) —— 同样是网络类,
+    # 可自愈; 而 10001001 这类**参数错误**不在表内, 不应重登(重试无用)。
     _SESSION_DEAD_PATTERNS = (
         "远程主机强迫关闭",
         "WinError 10054",
+        "10002007",
+        "网络接收错误",
         "ConnectionError",
         "RemoteDisconnected",
         "Connection reset",
@@ -187,8 +193,9 @@ class BaostockSource(DataSource):
         end = self._normalize_date(end_date) or "2099-12-31"
         logger.debug(f"[baostock] 获取日线: {bs_symbol}, {start} ~ {end}")
 
-        rs = self._query_with_selfheal(
-            lambda: bs.query_history_k_data_plus(
+        def _query_and_check() -> object:
+            """查询 + 错误码检查; 网络类错误码(如 10002007)转为异常交给自愈层"""
+            _rs = bs.query_history_k_data_plus(
                 bs_symbol,
                 "date,open,high,low,close,volume,amount,turn,pctChg",
                 start_date=start,
@@ -196,10 +203,13 @@ class BaostockSource(DataSource):
                 frequency="d",
                 adjustflag=adjust_flag,
             )
-        )
+            if _rs.error_code != "0":
+                # 网络类错误码(10002007 等)以异常形式抛出 —— 让 _query_with_selfheal
+                # 判定并重登重试; 参数类错误(10001001)同样抛出但不触发自愈。
+                raise RuntimeError(f"baostock查询失败: {_rs.error_code} {_rs.error_msg}")
+            return _rs
 
-        if rs.error_code != "0":
-            raise RuntimeError(f"baostock查询失败: {rs.error_code} {rs.error_msg}")
+        rs = self._query_with_selfheal(_query_and_check)
 
         data = []
         while rs.next():
