@@ -199,6 +199,31 @@ def run_paper_cycle(account_id: str, days: int) -> dict[str, Any]:
         engine = _get_engine(account_id)
         steps = engine.run(days=max(1, int(days)))
         persisted, persist_error = _persist(account_id, engine)
+
+        # 池子被剔空 → **不当作成功**。
+        # 观察期实测(2026-10-12 首个交易日): 3 只标的取数全部失败被剔除,
+        # step() 返回 no_symbols, 而这里仍返回 ok —— 调度记录 ✅、无告警,
+        # 用户以为"每天在跑", 其实之后每天都空跑(缓存+落盘互为锁, 永远救不回来)。
+        # 这正是本项目最怕的"看着正常的假成功", 必须显式暴露。
+        if not steps and not engine.symbols:
+            dropped = ", ".join(engine.dropped_symbols[:5]) or "(无记录)"
+            return {
+                "status": "pool_empty",
+                "steps": 0,
+                "from": "",
+                "to": "",
+                "trades": len(engine.account.trades),
+                "total_asset": round(engine.account.total_asset, 2),
+                "symbols": [],
+                "pool_empty_reason": (
+                    f"股票池已空: 全部 {len(engine.dropped_symbols)} 只标的取数失败"
+                    f"被剔除({dropped})。请检查数据源或换池(POST /api/paper/universe)"
+                ),
+                "persisted": persisted,
+                "persist_error": persist_error,
+                "disclaimer": DISCLAIMER,
+            }
+
         return {
             "status": "ok",
             "steps": len(steps),
