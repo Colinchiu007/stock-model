@@ -45,6 +45,9 @@ _engines: dict[str, PaperEngine] = {}
 # 「手动点一下」和「定时跑一轮」同时撮合, 同一笔挂单被撮两次。
 _locks: dict[str, threading.RLock] = {}
 _locks_guard = threading.Lock()
+# 正在构造中的账户 → Event(构造完成时 set)。用于"并发首次请求只构造一次",
+# 同时**不持账户锁**做慢速 IO(见 _get_engine 的警告注释)。
+_building: dict[str, threading.Event] = {}
 
 
 def _account_lock(account_id: str) -> threading.RLock:
@@ -126,30 +129,65 @@ def _build_engine(
 
 
 def _get_engine(account_id: str = "default") -> PaperEngine:
-    """取或建引擎实例(进程重启后从磁盘恢复)"""
+    """取或建引擎实例(进程重启后从磁盘恢复)
+
+    ⚠️ **慢速构造(数据源 login/取数)必须在锁外**:
+    早期实现把 ``_build_engine`` 放在 ``_account_lock`` 临界区内 ——
+    baostock 挂起时 login 能卡 20s+, 而锁是**每账户**的, 于是该账户的
+    所有请求(连只读的 schedule 状态查询)全部排队, 前端表现是
+    「点了开启定时没反应」(2026-10-13 E2E 实测)。
+    现在锁只保护 ``_engines`` 字典的读写, 构造本身不持锁;
+    「只构造一次」由字典双检 + 构造占位保证。
+    """
     if account_id in _engines:
         return _engines[account_id]
 
-    with _account_lock(account_id):
-        if account_id in _engines:  # 双检: 等锁期间可能已被别的线程建好
-            return _engines[account_id]
-
-        from stock_model.paper.store import load_account, load_metadata
-
-        account = load_account(account_id)
-        metadata = load_metadata(account_id)
-
-        if account is not None:
-            logger.info(
-                f"账户 {account_id} 从磁盘恢复: 持仓 {len(account.positions)}, "
-                f"成交 {len(account.trades)}, 游标 {len(metadata.get('cursor') or {})} 只"
-            )
+    # 锁外构造(慢): 用占位对象防并发重复构造
+    with _locks_guard:
+        if account_id in _building:
+            placeholder = _building[account_id]
         else:
-            logger.info(f"账户 {account_id} 无落盘状态, 新建")
+            placeholder = threading.Event()
+            _building[account_id] = placeholder
+            placeholder = None  # 我负责构造
 
-        engine = _build_engine(account_id, metadata, account)
-        _engines[account_id] = engine
-        return engine
+    if placeholder is not None:
+        # 别人正在构造: 等它完成(不持账户锁, 不阻塞别的请求)
+        placeholder.wait(timeout=300)
+        if account_id in _engines:
+            return _engines[account_id]
+        # 构造失败/超时: 自己再试一次(锁外)
+        return _construct_engine(account_id)
+
+    try:
+        return _construct_engine(account_id)
+    finally:
+        with _locks_guard:
+            ev = _building.pop(account_id, None)
+        if ev is not None:
+            ev.set()
+
+
+def _construct_engine(account_id: str) -> PaperEngine:
+    """真正构造引擎(慢, 锁外) + 双检落库"""
+    if account_id in _engines:
+        return _engines[account_id]
+    from stock_model.paper.store import load_account, load_metadata
+
+    account = load_account(account_id)
+    metadata = load_metadata(account_id)
+
+    if account is not None:
+        logger.info(
+            f"账户 {account_id} 从磁盘恢复: 持仓 {len(account.positions)}, "
+            f"成交 {len(account.trades)}, 游标 {len(metadata.get('cursor') or {})} 只"
+        )
+    else:
+        logger.info(f"账户 {account_id} 无落盘状态, 新建")
+
+    engine = _build_engine(account_id, metadata, account)
+    _engines[account_id] = engine
+    return engine
 
 
 def _rebuild_engine(account_id: str, symbols: list[str]) -> PaperEngine:

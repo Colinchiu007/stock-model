@@ -30,6 +30,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
@@ -107,7 +108,18 @@ class TestUnwrapRetryError:
 class TestFallbackChain:
     def test_retry_error_triggers_fallback(self, fetcher_cls, monkeypatch):
         """主源抛 RetryError(连接类) → 必须尝试备选源(而不是穿透)"""
-        f = fetcher_cls(source="akshare")
+        # 备选源构造也 patch 掉: 真实 BaostockSource() 要 login,
+        # 凌晨数据源全挂时会拖死/失败, 让断言"应有备选"变成环境依赖
+        # (2026-10-13 实测: 该假设在 baostock 整体抖动时不成立)。
+        fake_primary = MagicMock()
+        fake_fallback = MagicMock()
+        fake_fallback.name = "baostock"
+        with patch.object(
+            fetcher_cls,
+            "_create_source",
+            side_effect=lambda name: fake_primary if name == "akshare" else fake_fallback,
+        ):
+            f = fetcher_cls(source="akshare")
         assert f._fallback_instance is not None, "akshare 应有 baostock 备选"
 
         calls: list[str] = []

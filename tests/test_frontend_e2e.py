@@ -56,9 +56,14 @@ def http_json(
 
 
 @pytest.fixture(scope="session")
-def server():
+def server(tmp_path_factory):
     if port_in_use():
         pytest.fail(f"端口 {PORT} 被占用 —— 会连到旧服务, 结果不可信")
+    # 数据目录隔离: 不设 STOCK_PAPER_DIR 时, E2E 服务与生产(8123)共享
+    # data/paper/ —— 测试里的停止/开启定时会互相踩(2026-10-13 实测:
+    # E2E 的 DELETE 把生产的调度配置也改了, 导致 wait_for_function 超时)。
+    data_dir = tmp_path_factory.mktemp("e2e_paper")
+    env = {**os.environ, "STOCK_PAPER_DIR": str(data_dir)}
     log = REPO / "experiments" / "_e2e_server.log"
     proc = subprocess.Popen(
         [
@@ -73,11 +78,13 @@ def server():
             str(PORT),
         ],
         cwd=str(REPO),
+        env=env,
         stdout=log.open("ab"),
         stderr=subprocess.STDOUT,
     )
     ok = False
-    for _ in range(45):
+    # 90s: 数据源抖动时 create_app 内的引擎初始化可能很慢(2026-10-13 实测)
+    for _ in range(90):
         time.sleep(1)
         if proc.poll() is not None:
             pytest.fail("服务进程退出")
@@ -109,7 +116,11 @@ def page(server):
         errors: list[str] = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
         pg.errors_ref = errors
-        pg.goto(BASE, wait_until="networkidle")
+        # 不用 networkidle: 页面加载会触发 /api/paper/* 请求, 数据源抖动时
+        # 那些请求可能挂起数十秒(2026-10-13 凌晨实测), networkidle 永不满足
+        # → Page.goto 30s 超时。domcontentloaded + 手动等控件就绪即可。
+        pg.goto(BASE, wait_until="domcontentloaded")
+        pg.wait_for_selector('button[data-tab="screener"]', timeout=15000)
         yield pg
         browser.close()
 
