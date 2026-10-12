@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
@@ -36,8 +37,12 @@ from stock_model.paper.store import write_json_atomic
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-# 默认存储目录: <项目根>/data/paper/
-DEFAULT_STORE_DIR = Path(__file__).resolve().parents[3] / "data" / "paper"
+# 默认存储目录: <项目根>/data/paper/ (STOCK_PAPER_DIR 可覆盖, 见 store.py)
+# 复用一个入口: 环境变量的语义只有一份, 避免"账户数据隔离了但调度配置没隔离"
+# 这种半吊子隔离(2026-10-13 E2E 污染教训)。
+DEFAULT_STORE_DIR = Path(
+    os.environ.get("STOCK_PAPER_DIR") or (Path(__file__).resolve().parents[3] / "data" / "paper")
+)
 DEFAULT_SCHEDULE_FILE = DEFAULT_STORE_DIR / "schedule.json"
 DEFAULT_HOLIDAY_FILE = DEFAULT_STORE_DIR / "holidays.json"
 
@@ -503,6 +508,7 @@ class PaperScheduler:
                 reason = "非交易日(周末或节假日)"
                 logger.info(f"[paper-schedule] 账户 {account_id} {now.date()} {reason}, 跳过")
                 self._notify_change(account_id, "skipped")
+                self._save_config()  # 跳过也是"今天已处理"的依据(周末/假日)
                 return {"status": "skipped", "reason": reason, "date": now.date().isoformat()}
 
             if state.trigger_type == "daily" and now.hour < MARKET_CLOSE_HOUR:
@@ -558,6 +564,7 @@ class PaperScheduler:
                     f"本次结果: {result.get('steps', 0)} 步, 成交 {result.get('trades', 0)} 笔",
                 )
             self._notify_change(account_id, "ok")
+            self._save_config()  # 统计落盘: 重启后兜底的"今天已处理"判断才有依据
             return {"status": "ok", "account_id": account_id, **state.last_result}
 
     def _record_failure(
@@ -594,6 +601,7 @@ class PaperScheduler:
                 f"排查: GET /api/paper/schedule?account_id={state.account_id}",
             )
         self._notify_change(state.account_id, "error")
+        self._save_config()  # 失败统计同样要落盘(重启后告警节流/连续失败判断才准)
         return {"status": "error", "account_id": state.account_id, "error": state.last_error}
 
     def _alert(self, state: ScheduleState, now: datetime, message: str) -> None:
@@ -636,6 +644,24 @@ class PaperScheduler:
         self._scheduler.start()
         return self._scheduler
 
+    # 运行统计字段: 必须与 trigger 配置**一起**落盘。
+    # 2026-10-13 实测教训: 只落盘 trigger 配置时, 重启后 run_count/
+    # last_run_at 清零 → 兜底脚本的"今天已处理"判断失效 → 重复推进
+    # 一个交易日(同一交易日撮合两次的风险)。
+    _STAT_KEYS = (
+        "run_count",
+        "error_count",
+        "skipped_count",
+        "consecutive_failures",
+        "last_run_at",
+        "last_status",
+        "last_error",
+        "last_result",
+        "alert_count",
+        "last_alert_at",
+        "last_alert_error",
+    )
+
     def _save_config(self) -> None:
         jobs = {
             account_id: {
@@ -646,6 +672,7 @@ class PaperScheduler:
                 "interval_minutes": s.interval_minutes,
                 "timezone": s.timezone,
                 "started_at": s.started_at,
+                **{k: getattr(s, k) for k in self._STAT_KEYS},
             }
             for account_id, s in self._states.items()
         }
@@ -695,6 +722,18 @@ class PaperScheduler:
                     timezone=str(cfg.get("timezone") or DEFAULT_TIMEZONE),
                     persist=False,
                 )
+                # 恢复运行统计(不落盘的那部分曾让兜底重复推进, 见 _STAT_KEYS 注释)
+                state = self._states.get(account_id)
+                if state is not None:
+                    for k in self._STAT_KEYS:
+                        if k in cfg:
+                            setattr(state, k, cfg[k])
+                    logger.info(
+                        f"[paper-schedule] 账户 {account_id} 运行统计已恢复: "
+                        f"run_count={state.run_count} "
+                        f"last_status={state.last_status or '—'} "
+                        f"last_run_at={state.last_run_at or '—'}"
+                    )
                 restored += 1
             except MissingDependencyError as e:
                 # 用户配置过定时, 重启后却因缺依赖静默跑不起来 —— 必须显式报错

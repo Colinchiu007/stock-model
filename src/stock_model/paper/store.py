@@ -37,7 +37,12 @@ from loguru import logger
 from stock_model.paper.models import Account
 
 # 默认存储目录: <项目根>/data/paper/
-DEFAULT_STORE_DIR = Path(__file__).resolve().parents[3] / "data" / "paper"
+# STOCK_PAPER_DIR 可覆盖(E2E 隔离/数据迁盘/多账户) ——
+# 2026-10-13 实测教训: E2E 起服务时没隔离数据目录, 补跑写进了**生产账户**
+# (default.json 出现 trade_id 重复的第二笔成交)。测试与生产必须分数据目录。
+DEFAULT_STORE_DIR = Path(
+    os.environ.get("STOCK_PAPER_DIR") or (Path(__file__).resolve().parents[3] / "data" / "paper")
+)
 
 
 def store_path(account_id: str, store_dir: Path | None = None) -> Path:
