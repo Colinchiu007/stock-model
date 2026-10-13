@@ -231,6 +231,11 @@ STOCK_API_TOKEN=change-me-to-a-long-random-string
 9. **策略不要动**：模拟盘要先真实跑满 2–4 周再评估（HANDOVER 第三节）。
 10. **变异验证**：新锁必须变异验证（改掉被保护的行为 → 对应测试必须变红）。
     负向断言的锁，变异要往「多触发」方向打（本项目 4 次假锁的教训）。
+11. **subprocess 文本模式必须显式编码**：Windows 上 `text=True` 默认按 UTF-8 解码，
+    而 netstat 等系统命令输出是 GBK → reader 线程炸 UnicodeDecodeError →
+    `r.stdout` 永远 None（异常被线程吞掉，只留一条 warning，2026-10-13
+    E2E teardown 实测踩到）。`text=True` 必须同时给 `encoding=` + `errors="replace"`，
+    解析只依赖 ASCII 列时 replace 不影响结果。回归：`tests/test_netstat_listener.py`。
 
 ## 5. 故障排查速查
 

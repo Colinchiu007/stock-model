@@ -40,22 +40,48 @@ def health_ok() -> bool:
         return False
 
 
+def _listener_pids(port: int) -> list[int]:
+    """找监听指定端口的 PID 列表(纯解析, 不杀进程)
+
+    ⚠️ Windows 中文环境下 netstat 的表头是 GBK 字节: ``text=True`` 默认按
+    UTF-8 解码, 会在 subprocess 的 reader 线程炸 UnicodeDecodeError →
+    ``r.stdout`` 永远停在 None(2026-10-13 E2E teardown 实测: kill_port
+    因此 AttributeError, 服务也没被杀掉)。端口/数字/状态列都是 ASCII,
+    ``errors="replace"`` 后解析不受影响。
+    """
+    r = subprocess.run(
+        ["netstat", "-ano"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+    if not r.stdout:
+        return []
+    pids: list[int] = []
+    for line in r.stdout.splitlines():
+        if f":{port} " in line and "LISTENING" in line:
+            try:
+                pids.append(int(line.split()[-1]))
+            except ValueError:
+                continue
+    return pids
+
+
 def kill_port(port: int) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(0.5)
         if s.connect_ex(("127.0.0.1", port)) != 0:
             return  # 没在监听
     # 通过 netstat 找 pid
-    r = subprocess.run(["netstat", "-ano"], capture_output=True, text=True, check=False)
-    for line in r.stdout.splitlines():
-        if f":{port} " in line and "LISTENING" in line:
-            pid = int(line.split()[-1])
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/F"],
-                capture_output=True,
-                check=False,
-            )
-            return
+    for pid in _listener_pids(port):
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F"],
+            capture_output=True,
+            check=False,
+        )
+        return
 
 
 class TestReviveChain:
