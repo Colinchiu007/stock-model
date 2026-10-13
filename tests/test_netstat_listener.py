@@ -15,7 +15,16 @@ import subprocess
 import sys
 import time
 
+import pytest
+
 from tests.test_revive_chain_e2e import _listener_pids
+
+# 被保护的 bug(GBK 输出 + netstat/taskkill 路径)只存在于中文 Windows;
+# 其他平台 netstat 输出格式不同, 该解析路径本就不适用(CI 跑 ubuntu)。
+pytestmark = pytest.mark.skipif(
+    sys.platform != "win32",
+    reason="netstat -ano/taskkill 是 Windows 专用路径, 被保护的 bug 也只在中文 Windows 出现",
+)
 
 _CHILD_CODE = (
     "import socket, time; "
