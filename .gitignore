@@ -71,3 +71,6 @@ models/trained/
 .coverage.*
 coverage.xml
 htmlcov/
+
+# 逆向分析解包产物（勿入仓，见 docs/OPERATIONS.md §4-6）
+.dsh_extract/
