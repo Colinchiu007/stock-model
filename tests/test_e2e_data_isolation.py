@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.test_revive_chain_e2e import kill_port
+
 REPO = Path(__file__).resolve().parents[1]
 PORT = 8127
 BASE = f"http://127.0.0.1:{PORT}"
@@ -114,18 +116,7 @@ class TestE2EIsolation:
         # 隔离目录里产生了自己的数据
         assert iso.exists() and any(iso.iterdir()), "隔离目录应有 E2E 自己的数据"
 
-        # 清理
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.settimeout(0.5)
-            if s.connect_ex(("127.0.0.1", PORT)) == 0:
-                r2 = subprocess.run(
-                    ["netstat", "-ano"], capture_output=True, text=True, check=False
-                )
-                for line in r2.stdout.splitlines():
-                    if f":{PORT} " in line and "LISTENING" in line:
-                        subprocess.run(
-                            ["taskkill", "/PID", line.split()[-1], "/F"],
-                            capture_output=True,
-                            check=False,
-                        )
-                        break
+        # 清理(复用修过解码的 kill_port; 本文件曾在这里内联 netstat 解析,
+        # 同款 GBK 解码 bug 让清理崩掉、服务残留占了 8127 —— 见
+        # docs/bug-reflection-2026-10-13.md)
+        kill_port(PORT)

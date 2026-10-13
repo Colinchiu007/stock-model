@@ -70,18 +70,24 @@ def main() -> int:
     status_emoji = {"ok": "✅", "error": "❌", "skipped": "⏭️", "": "·"}.get(
         sched.get("last_status", ""), "·"
     )
-    print(f"定时: {'已开启' if sched.get('running') else '未开启'}"
-          f" | 下次: {sched.get('next_run_time') or '—'}")
-    print(f"上次: {status_emoji} {sched.get('last_status') or '无'}"
-          f" @ {sched.get('last_run_at') or '—'}")
+    print(
+        f"定时: {'已开启' if sched.get('running') else '未开启'}"
+        f" | 下次: {sched.get('next_run_time') or '—'}"
+    )
+    print(
+        f"上次: {status_emoji} {sched.get('last_status') or '无'}"
+        f" @ {sched.get('last_run_at') or '—'}"
+    )
     if sched.get("last_status") == "error":
         print(f"   错误: {sched.get('last_error')}")
         if sched.get("consecutive_failures", 0) >= 2:
             print(f"   ⚠️ 已连续失败 {sched['consecutive_failures']} 次")
-    print(f"统计: 成功 {sched.get('run_count', 0)} / 失败 {sched.get('error_count', 0)}"
-          f" / 跳过 {sched.get('skipped_count', 0)}"
-          f" | 告警已发 {sched.get('alert_count', 0)} 条"
-          f" ({sched.get('alert_channel', '—')})")
+    print(
+        f"统计: 成功 {sched.get('run_count', 0)} / 失败 {sched.get('error_count', 0)}"
+        f" / 跳过 {sched.get('skipped_count', 0)}"
+        f" | 告警已发 {sched.get('alert_count', 0)} 条"
+        f" ({sched.get('alert_channel', '—')})"
+    )
     for w in sched.get("warnings", []):
         print(f"   ⚠️ {w}")
 
@@ -92,11 +98,12 @@ def main() -> int:
         print("═══")
         return 0
     ret = acc.get("total_return", 0) * 100
-    print(f"账户: 总资产 ¥{acc.get('total_asset', 0):,.2f} ({ret:+.2f}%)"
-          f" | 现金 ¥{acc.get('cash', 0):,.2f}")
+    print(
+        f"账户: 总资产 ¥{acc.get('total_asset', 0):,.2f} ({ret:+.2f}%)"
+        f" | 现金 ¥{acc.get('cash', 0):,.2f}"
+    )
     trades = _trades_count(port)
-    print(f"      成交 {trades} 笔"
-          f" | 交易日 {acc.get('trading_days', 0)} 天")
+    print(f"      成交 {trades} 笔 | 交易日 {acc.get('trading_days', 0)} 天")
 
     # 观察期标尺
     if trades < 20:

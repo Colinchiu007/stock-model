@@ -30,13 +30,16 @@ jobs:
           # 那两类在 pyproject 的 [[tool.mypy.overrides]] 里点名豁免)。
           pip install -e ".[dev,quant,schedule,web]"
       - name: Ruff check
-        run: ruff check src/ tests/
+        run: ruff check src/ tests/ scripts/
       - name: Ruff format check
-        run: ruff format --check src/ tests/
+        run: ruff format --check src/ tests/ scripts/
       - name: Mypy check
         # 历史上 CI 只 pip install mypy 却从不执行它, 存量 86 个错误无人可见。
         # 注意不要加 `|| true`: 失败必须让 CI 红。
-        run: mypy src/stock_model
+        # 2026-10-13: scripts/ 曾不在 ruff/mypy 覆盖范围内 —— 盲区里躺着
+        # 12 个 ruff 违规 + 9 个 mypy 错误(含 2 个潜在真 bug: Popen|None
+        # 解引用、ping() 缺 return)。三个门禁现在都覆盖 scripts/。
+        run: mypy src/stock_model scripts/
 
   test:
     name: Test (Python ${{ matrix.python-version }})

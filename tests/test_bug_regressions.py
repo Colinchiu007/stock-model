@@ -1,19 +1,23 @@
 """Bug 回归保护测试 (QM-5 ④)
 
-本文件针对 4 个已确认并修复的 bug 建立回归保护。每个测试对应一个真实逃逸漏洞，
+本文件针对已确认并修复的 bug 建立回归保护。每个测试对应一个真实逃逸漏洞，
 防止同类问题再次出现。
 
-背景：这4个bug的共同特征是「测试全绿(396 passed)但缺陷真实存在」——
+背景：早期 4 个 bug 的共同特征是「测试全绿(396 passed)但缺陷真实存在」——
 测试只验证了「函数返回了东西」，没有验证「返回值语义正确」。
 
 Bug 引入点:
   - Bug 1/2: c7feba9 (Phase 2 complete) / 59d7907 (add TradingPipeline)
   - Bug 3:   3c9a3c6 (commit 标题写着 "fix demo.py API names"，实际引入了错误 key)
   - Bug 4:   3bc855a (bump version to 0.5.0，只改了 __init__.py)
+  - Bug 5(2026-10-13): subprocess text=True 未显式编码 —— 中文 Windows 上
+    GBK 输出让 reader 线程静默失败(stdout=None), 两处实例 + 机械锁
+    (TestSubprocessTextModeEncoding), 详见 docs/bug-reflection-2026-10-13.md
 """
 
 import pathlib
 import re
+import subprocess
 from functools import lru_cache
 
 import pandas as pd
@@ -449,3 +453,59 @@ class TestGeneralIntegrity:
                 if ref.split("/")[-1] not in idx:
                     missing.append(ref)
         assert not missing, f"{doc} 引用了不存在的源码文件: {sorted(missing)}"
+
+
+class TestSubprocessTextModeEncoding:
+    """subprocess 文本模式必须显式编码 —— 2026-10-13 E2E teardown 缺陷的行为锁
+
+    为什么值得上锁（详见 docs/bug-reflection-2026-10-13.md）：中文 Windows 上
+    ``text=True`` 默认按 UTF-8 解码系统命令（netstat 等）的 GBK 输出，
+    subprocess reader 线程炸 UnicodeDecodeError —— 异常在线程里被吞，
+    只留一条 warning，``r.stdout`` 恒为 None，调用方随后 AttributeError，
+    **清理逻辑静默失效**（服务残留占了端口，下一轮测试的前置断言失败）。
+    2026-10-13 一天内抓到两处同款（test_revive_chain_e2e.py 的 kill_port 与
+    test_e2e_data_isolation.py 的清理代码），普通 grep 单行模式抓不到跨行调用，
+    故上机械锁：括号深度切分 + 全仓 tracked .py 覆盖，不留手写名单。
+
+    修法：调用处补 ``encoding="utf-8", errors="replace"``
+    （解析只依赖 ASCII 列时 replace 无副作用；OPERATIONS.md 红线 #11）。
+    """
+
+    @staticmethod
+    def _tracked_py_files() -> list[str]:
+        cmd = ["git", "ls-files", "-z"]
+        out = subprocess.run(cmd, capture_output=True, check=False).stdout
+        return [f for f in out.decode("utf-8").split("\0") if f.endswith(".py")]
+
+    @staticmethod
+    def _call_args(text: str, start: int) -> str:
+        """从 subprocess.xxx( 出发按括号深度切出完整实参文本（跨行安全）"""
+        i = text.index("(", start)
+        depth = 0
+        for j in range(i, len(text)):
+            ch = text[j]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    return text[i + 1 : j]
+        return text[i + 1 :]
+
+    def test_no_text_mode_without_encoding(self):
+        offenders = []
+        for rel in self._tracked_py_files():
+            text = (REPO_ROOT / rel).read_text(encoding="utf-8", errors="replace")
+            for m in re.finditer(r"subprocess\.(?:run|check_output|Popen|call)\s*\(", text):
+                args = self._call_args(text, m.start())
+                if not re.search(r"text\s*=\s*True|universal_newlines\s*=\s*True", args):
+                    continue
+                if not re.search(r"encoding\s*=", args):
+                    line_no = text[: m.start()].count("\n") + 1
+                    offenders.append(f"{rel}:{line_no}")
+        assert not offenders, (
+            f"subprocess 文本模式未显式编码: {offenders} —— 中文 Windows 上 "
+            "text=True 默认 UTF-8 解码会静默失败(stdout=None, 见 "
+            "docs/bug-reflection-2026-10-13.md)。修法: 补 "
+            'encoding="utf-8", errors="replace"'
+        )

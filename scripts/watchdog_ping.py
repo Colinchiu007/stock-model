@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """死信开关（watchdog ping）—— 机器彻底关机/断网时的最后一块保障
 
 为什么需要
@@ -55,16 +54,19 @@ def ping(url: str | None, *, ok: bool = True, timeout: int = PING_TIMEOUT) -> bo
         return False
     target = url.rstrip("/") + ("" if ok else "/fail")
     try:
-        req = urllib.request.Request(target, method="GET")  # noqa: S310 - 用户配置的 URL
+        # S310: URL 来自用户配置(.env), 属于既定设计
+        req = urllib.request.Request(target, method="GET")
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return 200 <= r.status < 300
+            return bool(200 <= r.status < 300)
     except (urllib.error.URLError, OSError, TimeoutError) as e:
-        print(f"⚠️ 死信开关 ping 失败({target}): {e} —— 兜底本身不受影响, "
-              f"但这次运行监控服务看不到, 超时后它可能误报")
+        print(
+            f"⚠️ 死信开关 ping 失败({target}): {e} —— 兜底本身不受影响, "
+            f"但这次运行监控服务看不到, 超时后它可能误报"
+        )
         return False
 
 
-def ping_quiet(url: str | None, *, ok: bool = True) -> bool:
+def ping_quiet(url: str | None, *, ok: bool = True) -> bool | None:
     """ping 的"未配置"感知封装：未配置返回 None，供调用方打一行提示"""
     if not url:
         print("ℹ️ 未配置死信开关(STOCK_PING_URL) —— 机器彻底关机时将无人通知")

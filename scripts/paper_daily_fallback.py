@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """模拟盘「今日兜底」脚本 —— 给进程外定时任务(harness/计划任务)调用
 
 它解决什么问题
@@ -31,14 +30,15 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
 import urllib.error
 import urllib.request
-import os
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
 # 同目录导入: 脚本被外部调度器直接执行, 无包上下文, sys.path[0] 即本目录
@@ -97,7 +97,8 @@ def today_handled(last_run_at: str, now: datetime, last_status: str = "") -> boo
 def _looks_like_date(s: str) -> bool:
     """粗判是否 YYYY-MM-DD(避免为兜底脚本引入 dateutil)"""
     try:
-        datetime.strptime(s, "%Y-%m-%d")
+        # 仅作格式/范围探测, 解析出的 datetime 随即丢弃, 不参与时区运算
+        datetime.strptime(s, "%Y-%m-%d")  # noqa: DTZ007
         return True
     except ValueError:
         return False
@@ -108,15 +109,18 @@ def run_exit_code(result: dict) -> int:
     return 0 if result.get("status") in ("ok", "skipped") else 1
 
 
-def http_json(path: str, method: str = "GET", payload: dict | None = None,
-              timeout: int = 30) -> dict:
-    req = urllib.request.Request(  # noqa: S310 - 固定本机地址
-        f"{BASE}{path}", method=method,
+def http_json(
+    path: str, method: str = "GET", payload: dict | None = None, timeout: int = 30
+) -> dict:
+    # S310: BASE 是固定的本机地址, 不来自外部输入 —— 即使将来启用 S 规则也是有意的
+    req = urllib.request.Request(
+        f"{BASE}{path}",
+        method=method,
         data=json.dumps(payload).encode("utf-8") if payload is not None else None,
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:  # noqa: S310
-        return json.loads(r.read().decode("utf-8"))
+    with urllib.request.urlopen(req, timeout=timeout) as r:  # S310: 同上, 固定本机
+        return cast("dict[Any, Any]", json.loads(r.read().decode("utf-8")))
 
 
 def server_alive() -> bool:
@@ -130,10 +134,22 @@ def start_server() -> subprocess.Popen | None:
     """后台拉起服务; 返回进程句柄(交给调用方决定是否留着)"""
     python = sys.executable
     log = open(LOG, "ab")  # noqa: SIM115 - 常驻日志, 交给服务进程持有
-    return subprocess.Popen(  # noqa: S603 - 固定参数
-        [python, "-m", "uvicorn", "--app-dir", "src",
-         "stock_model.web.app:create_app", "--factory", "--port", str(PORT)],
-        cwd=str(REPO), stdout=log, stderr=subprocess.STDOUT,
+    # S603: 参数完全固定(python -m uvicorn ...), 无外部输入
+    return subprocess.Popen(
+        [
+            python,
+            "-m",
+            "uvicorn",
+            "--app-dir",
+            "src",
+            "stock_model.web.app:create_app",
+            "--factory",
+            "--port",
+            str(PORT),
+        ],
+        cwd=str(REPO),
+        stdout=log,
+        stderr=subprocess.STDOUT,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
 
@@ -152,6 +168,9 @@ def main() -> int:
     if not server_alive():
         print("服务未运行, 后台拉起…")
         proc = start_server()
+        if proc is None:
+            print("✗ 服务进程拉起失败(Popen 返回 None), 详见日志")
+            return 1
         deadline = time.time() + WAIT_HEALTH_SECONDS
         while time.time() < deadline:
             if server_alive():
@@ -171,8 +190,10 @@ def main() -> int:
     now = datetime.now(TZ)
     last_run_at = sched.get("last_run_at") or ""
     already = today_handled(last_run_at, now, sched.get("last_status") or "")
-    print(f"今日({now.date().isoformat()})已处理: {already}  "
-          f"last_run_at={last_run_at!r}  last_status={sched.get('last_status')!r}")
+    print(
+        f"今日({now.date().isoformat()})已处理: {already}  "
+        f"last_run_at={last_run_at!r}  last_status={sched.get('last_status')!r}"
+    )
 
     if already:
         print("无需处理, 退出")
@@ -186,17 +207,22 @@ def main() -> int:
     # 兜底可能在"服务被重新拉起、还没有任何配置"时运行 ——
     # 实测: 那时 run 会返回 error「账户 default 没有调度配置」, 兜底就白跑了。
     if not sched.get("running"):
-        sched = http_json("/api/paper/schedule", method="POST",
-                          payload={"account_id": "default", "hour": 15,
-                                   "minute": 30, "days": 1})
+        sched = http_json(
+            "/api/paper/schedule",
+            method="POST",
+            payload={"account_id": "default", "hour": 15, "minute": 30, "days": 1},
+        )
         print(f"调度配置已就绪: running={sched.get('running')}")
 
-    result = http_json("/api/paper/schedule/run", method="POST",
-                       payload={"account_id": "default"}, timeout=900)
+    result = http_json(
+        "/api/paper/schedule/run", method="POST", payload={"account_id": "default"}, timeout=900
+    )
     status = result.get("status")
-    print(f"执行结果: status={status} "
-          f"steps={result.get('steps')} trades={result.get('trades')} "
-          f"reason={result.get('reason') or result.get('error') or ''}")
+    print(
+        f"执行结果: status={status} "
+        f"steps={result.get('steps')} trades={result.get('trades')} "
+        f"reason={result.get('reason') or result.get('error') or ''}"
+    )
     # skipped(非交易日) 与 ok 都算"今天的账已处理"; error/未知才算失败
     code = run_exit_code(result)
     # 死信开关: 无论成败都 ping(失败 ping /fail 让监控立即告警)。
