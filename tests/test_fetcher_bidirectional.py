@@ -17,12 +17,16 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
 
 from stock_model.data.fetcher import StockDataFetcher
+
+if TYPE_CHECKING:
+    from stock_model.data.sources.base import DataSource
 
 
 class FakeSource:
@@ -60,8 +64,8 @@ def _make_fetcher(primary: str, fallback: FakeSource) -> StockDataFetcher:
         side_effect=lambda name: fake_primary if name == primary else fallback,
     ):
         f = StockDataFetcher(source=primary)
-    f._source_instance = fake_primary
-    f._fallback_instance = fallback
+    f._source_instance = cast("DataSource", fake_primary)
+    f._fallback_instance = cast("DataSource", fallback)
     f._cache_enabled = False  # 隔离: 真实磁盘缓存会让源根本不被调用(实测踩过)
     return f
 

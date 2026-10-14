@@ -217,7 +217,7 @@ class TestIndicatorNumerics:
             out = values[0]
             for v in values[1:]:
                 out = alpha * v + (1 - alpha) * out
-            return out
+            return float(out)
 
         expected = ema(closes, 12) - ema(closes, 26)
         actual = float(result["MACD_12_26_9"].iloc[-1])

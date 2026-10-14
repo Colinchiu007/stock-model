@@ -35,7 +35,7 @@ pytestmark = pytest.mark.skipif(
 def health_ok() -> bool:
     try:
         with urllib.request.urlopen(f"{BASE}/api/health", timeout=3) as r:
-            return json.loads(r.read()).get("status") == "ok"
+            return bool(json.loads(r.read()).get("status") == "ok")
     except Exception:
         return False
 

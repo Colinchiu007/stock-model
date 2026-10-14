@@ -17,6 +17,7 @@ import sys
 import time
 import urllib.request
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 
@@ -52,7 +53,7 @@ def http_json(
         headers={"Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
+        return cast("dict[Any, Any]", json.loads(r.read().decode("utf-8")))
 
 
 @pytest.fixture(scope="session")
@@ -273,7 +274,7 @@ class TestDeepFlows:
         state_sel = "#pp-sched-state"
 
         def state_text() -> str:
-            return page.locator(state_sel).inner_text()
+            return str(page.locator(state_sel).inner_text())
 
         # 步骤 1: 压到"未开启"
         if "已开启" in state_text():

@@ -39,7 +39,9 @@ jobs:
         # 2026-10-13: scripts/ 曾不在 ruff/mypy 覆盖范围内 —— 盲区里躺着
         # 12 个 ruff 违规 + 9 个 mypy 错误(含 2 个潜在真 bug: Popen|None
         # 解引用、ping() 缺 return)。三个门禁现在都覆盖 scripts/。
-        run: mypy src/stock_model scripts/
+        # 2026-10-14: tests/ 的 7 个 mypy 历史错误(no-any-return/cast)已清，
+        # mypy 覆盖扩展到 tests/ —— src/scripts/tests 三个目录全在门禁内。
+        run: mypy src/stock_model scripts/ tests/
 
   test:
     name: Test (Python ${{ matrix.python-version }})

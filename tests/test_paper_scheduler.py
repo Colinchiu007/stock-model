@@ -17,6 +17,7 @@ import sys
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -303,7 +304,7 @@ class TestCommittedHolidayCalendar:
     def _days() -> list[str]:
         path = REPO_ROOT / "data" / "paper" / "holidays.json"
         assert path.is_file(), f"缺少 {path}（跑 experiments/generate_holidays.py 生成）"
-        return json.loads(path.read_text(encoding="utf-8"))
+        return cast("list[str]", json.loads(path.read_text(encoding="utf-8")))
 
     def test_well_formed(self):
         days = self._days()
