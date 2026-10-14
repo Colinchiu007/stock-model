@@ -55,7 +55,7 @@ def _ws_testclient_broken() -> bool:
 
     try:
         with TestClient(probe) as c, c.websocket_connect("/probe") as w:
-            return w.receive_text() != '{"ok":1}'
+            return bool(w.receive_text() != '{"ok":1}')
     except Exception:
         return True
 

@@ -28,7 +28,9 @@ jobs:
           # "Cannot find implementation or library stub", 看着跑了其实没查。
           # 这里装上与主测试 job 一致的一组(rl / ta 两个 extra 除外 ——
           # 那两类在 pyproject 的 [[tool.mypy.overrides]] 里点名豁免)。
-          pip install -e ".[dev,quant,schedule,web]"
+          # e2e extra: mypy 门禁覆盖 tests/ 后需要 playwright 的类型存根
+          # (test_frontend_e2e.py 导入 playwright.sync_api) —— 2026-10-14。
+          pip install -e ".[dev,quant,schedule,web,e2e]"
       - name: Ruff check
         run: ruff check src/ tests/ scripts/
       - name: Ruff format check
