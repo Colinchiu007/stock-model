@@ -44,9 +44,11 @@ class TestAccountDataIntegrity:
         spent = 0.0
         for t in d.get("trades") or []:
             spent += float(t.get("amount") or 0.0)
-            spent += (float(t.get("commission") or 0.0)
-                      + float(t.get("stamp_tax") or 0.0)
-                      + float(t.get("transfer_fee") or 0.0))
+            spent += (
+                float(t.get("commission") or 0.0)
+                + float(t.get("stamp_tax") or 0.0)
+                + float(t.get("transfer_fee") or 0.0)
+            )
         expected = float(d.get("initial_capital") or 0.0) - spent
         assert float(d.get("cash")) == pytest.approx(expected, abs=0.01), (
             f"现金 {d.get('cash')} != 期望 {expected}"
