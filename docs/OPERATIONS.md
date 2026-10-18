@@ -288,6 +288,22 @@ handler 直调（正常）、websockets 版本（13.1 与 17.2 均 403）。
 实现：`scripts/watchdog_ping.py`（ping 失败绝不影响兜底退出码，但打日志）。
 测试：`tests/test_watchdog_ping.py`（6 条）+ 接线测试（4 条）。
 
+⚠️ **配完必须验证真的生效**（2026-10-14 修过一个静默 bug，见 §8）：
+
+```powershell
+python scripts/paper_daily_fallback.py
+```
+
+- 输出**不再**出现 `ℹ️ 未配置死信开关` = `.env` 已被加载
+- healthchecks.io 的 Check 页面应显示"Last Ping"为刚才
+
+若仍打印"未配置"：`.env` 必须放在**仓库根目录**（`D:\Data\projects\stock-model-new\.env`，
+与 `.env.example` 同级），不是 `scripts/` 下。加载逻辑在
+`scripts/paper_daily_fallback.py::load_dotenv_files()`，**不覆盖已有环境变量**
+（调度器/Docker 注入的优先），`.env` 缺失/损坏时静默降级不崩。
+
+同理适用于 `.env` 里的 `FALLBACK_BASE_URL`（容器部署时兜底直连 app 的地址）。
+
 ## 8. 变更记录
 
 - 2026-10-10：首版。覆盖 §1–§5 全部命令，均在本会话实测（来源见各节标注）。
@@ -295,3 +311,9 @@ handler 直调（正常）、websockets 版本（13.1 与 17.2 均 403）。
 - 2026-10-10（晚）：**移除 Docker 交付**（TD-07 回到待办）——经确认，全部功能在本机部署形态下完整可用，Docker 只服务「换机/上云」场景，而容器从未构建验证过，留着是信任负担。原 Dockerfile/compose 可在 git 历史（PR #30）找回。
 - 2026-10-10：§6 预期测试数改为「以 CI 为准」。
 - 2026-10-10：新增 §3b 仪表盘认证（默认关，配置即强制；公网部署前必设）。
+- 2026-10-14：修 §7 死信开关的**静默失效**——`.env.example` 一直教用户把
+  `STOCK_PING_URL` 写进 `.env`，但没有任何代码把 `.env` 加载进 `os.environ`：
+  服务内变量走 pydantic-settings（一直是对的），进程外兜底脚本直读
+  `os.environ`（文档配了也不生效，无任何报错）。新增
+  `load_dotenv_files()`（`override=False`，真实环境变量优先；`.env` 缺失/损坏
+  静默降级）与回归测试 `tests/test_dotenv_loading.py`（10 条，变异 3/3 红）。

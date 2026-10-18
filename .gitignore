@@ -38,6 +38,8 @@ data/cache/
 # 后面的 ! 规则无法把子文件捞回来。
 data/paper/*
 !data/paper/holidays.json
+# 数据修复前的备份(带时间戳), 只留在本地做回滚凭据, 不进版本库
+data/paper/*.bak_*
 
 # 端到端验证脚本的 transcript (每次跑都会覆盖)
 experiments/_verify_output.txt

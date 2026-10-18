@@ -52,10 +52,55 @@ DEFAULT_PORT = 8123
 PORT = DEFAULT_PORT
 # FALLBACK_BASE_URL: 容器部署时兜底容器经 Docker 网络直连 app(如 http://app:8000),
 # 覆盖"127.0.0.1 + PORT"的默认拼法。--port 参数仍优先(显式 > 环境变量 > 默认)。
+# ⚠️ 这里只取"导入时已在环境里"的值; .env 里的值由 main() 开头
+# load_dotenv_files() 之后重新求值(见 main 内的 _refresh_base)。
 BASE = os.environ.get("FALLBACK_BASE_URL") or f"http://127.0.0.1:{PORT}"
 LOG = Path(__file__).with_suffix(".log")
 TZ = ZoneInfo("Asia/Shanghai")
 WAIT_HEALTH_SECONDS = 60
+# .env 位置: 仓库根目录(与 .env.example / OPERATIONS.md 的说明一致)
+DOTENV_PATH = REPO / ".env"
+
+
+def load_dotenv_files() -> None:
+    """把仓库根目录的 .env 加载进 os.environ(**不覆盖已有变量**)
+
+    为什么需要
+    ----------
+    `.env.example` 与 docs/OPERATIONS.md 都教用户把 ``STOCK_PING_URL``
+    (死信开关) / ``FALLBACK_BASE_URL``(容器部署)写进 ``.env``, 但本脚本
+    直接读 ``os.environ`` —— 而**没有任何代码把 .env 加载进来**。
+
+    服务内路径(STOCK_API_TOKEN / STOCK_NOTIFY_*)不受影响: 它们走
+    pydantic-settings, 其 ``env_file=".env"`` 自己会读。进程外的脚本
+    (本文件, 由外部调度器直接 ``python scripts/...`` 调用)没有 Settings
+    包装, 只能自己加载。缺失的后果是**静默**的: 用户按文档配好了,
+    脚本照样打印"未配置死信开关", 没有任何报错。
+
+    优先级(不覆盖已有变量)
+    ---------------------
+    真实环境变量优先于 .env —— 调度器/Docker 注入的配置必须赢,
+    否则测试环境会被仓库自带的 .env 污染(CI 也可能跟着挂)。
+    ``load_dotenv`` 默认即此语义(``override=False``), 这里显式写出。
+
+    健壮性
+    ------
+    .env 不存在/为空/格式损坏时静默返回 —— 兜底是无人值守的,
+    配置坏了也要把当天的账补上(misconfiguration ≠ 不处理)。
+    python-dotenv 本身是 pydantic-settings 的硬依赖, 必然已安装;
+    但兜底脚本不以"它一定在"为前提, 缺失时降级为不加载并说明。
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        print("ℹ️ python-dotenv 未安装, 跳过 .env 加载(仅影响 STOCK_PING_URL 等文件配置)")
+        return
+    if not DOTENV_PATH.is_file():
+        return
+    try:
+        load_dotenv(DOTENV_PATH, override=False)
+    except Exception as e:  # 配置解析失败不能带崩兜底(misconfiguration ≠ 不处理)
+        print(f"⚠️ .env 解析失败({e}), 按未配置继续 —— 兜底本身不受影响")
 
 
 def extract_port(args: list[str]) -> int:
@@ -156,6 +201,13 @@ def start_server() -> subprocess.Popen | None:
 
 def main() -> int:
     global PORT, BASE
+    # .env 必须先加载: STOCK_PING_URL / FALLBACK_BASE_URL 都可能在里面配
+    # (见 .env.example 与 docs/OPERATIONS.md §5), 而下面直接读 os.environ。
+    load_dotenv_files()
+    # 模块级 BASE 在 import 时求值, 早于 .env 加载 —— 这里按当前环境重算,
+    # 让 .env 里的 FALLBACK_BASE_URL 也能生效(容器部署场景)。
+    if os.environ.get("FALLBACK_BASE_URL"):
+        BASE = os.environ["FALLBACK_BASE_URL"]
     port = extract_port(sys.argv[1:])
     if "--port" in sys.argv[1:]:
         PORT = port
