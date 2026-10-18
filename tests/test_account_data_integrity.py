@@ -18,17 +18,19 @@ from __future__ import annotations
 
 import json
 import pathlib
+from typing import Any
 
 import pytest
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 
 
-def load_default() -> dict:
+def load_default() -> dict[str, Any]:
     f = REPO / "data" / "paper" / "default.json"
     if not f.exists():  # pragma: no cover - 环境无账户文件时跳过
         pytest.skip("无账户文件")
-    return json.loads(f.read_text(encoding="utf-8"))
+    data: dict[str, Any] = json.loads(f.read_text(encoding="utf-8"))
+    return data
 
 
 class TestAccountDataIntegrity:
