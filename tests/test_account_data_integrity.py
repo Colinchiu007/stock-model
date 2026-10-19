@@ -74,3 +74,41 @@ class TestAccountDataIntegrity:
             f"dropped_symbols 残留(与当前池重合): {overlap} —— "
             f"成功推进后应清空, 否则诊断/显示会误导"
         )
+
+    def test_cursor_equals_curve_length(self):
+        """cursor 必须等于资金曲线点数(差一会重复推进同一根 bar)
+
+        2026-10-18 手工修复时把曲线截断到 65 点却把 cursor 设成 64 ——
+        差一导致 step() 重复处理最后一根 bar(隔离演练实测返回重复日期)。
+        """
+        d = load_default()
+        curve_len = len(d.get("equity_curve") or [])
+        cursor = (d.get("_metadata") or {}).get("cursor") or {}
+        if not cursor:  # 全新账户还没推进过
+            pytest.skip("无游标")
+        for symbol, idx in cursor.items():
+            assert idx == curve_len, (
+                f"{symbol} cursor={idx} != 曲线点数={curve_len} —— "
+                f"差一会让下一步重复处理最后一根 bar"
+            )
+
+    def test_curve_dates_strictly_increasing(self):
+        """曲线日期必须严格递增且不重复"""
+        d = load_default()
+        dates = [e.get("date") for e in (d.get("equity_curve") or [])]
+        if not dates:
+            pytest.skip("无曲线")
+        assert dates == sorted(dates), f"曲线日期非递增(尾部): {dates[-5:]}"
+        assert len(dates) == len(set(dates)), f"曲线日期有重复: {dates[-5:]}"
+
+    def test_curve_last_point_self_consistent(self):
+        """曲线末点: cash + market_value == total_asset"""
+        d = load_default()
+        curve = d.get("equity_curve") or []
+        if not curve:
+            pytest.skip("无曲线")
+        last = curve[-1]
+        total = float(last.get("cash") or 0) + float(last.get("market_value") or 0)
+        assert abs(total - float(last.get("total_asset") or 0)) < 0.01, (
+            f"末点不自洽: cash+市值={total:.2f} vs total_asset={last.get('total_asset')}"
+        )
