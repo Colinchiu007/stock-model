@@ -317,11 +317,10 @@ def register_screener_routes(app: Any) -> None:
     ) -> dict:
         """单只股票的完整分析明细(含指标快照)"""
         from stock_model.analysis.technical import TechnicalAnalysis
-        from stock_model.data.fetcher import StockDataFetcher
         from stock_model.data.monitor import DataQualityMonitor
 
         try:
-            fetcher = StockDataFetcher(source=data_source)
+            fetcher = _fetcher_for(data_source)
             df = fetcher.get_daily(symbol, start_date=start_date)
             if df is None or df.empty:
                 return {"symbol": symbol, "error": "无数据"}
@@ -396,12 +395,11 @@ def register_screener_routes(app: Any) -> None:
         initial_cash: float = 100000.0,
     ) -> dict:
         """回测详情, 含完整交易记录(用于展示"最近买卖")"""
-        from stock_model.data.fetcher import StockDataFetcher
         from stock_model.strategy.engine import BacktestEngine
         from stock_model.strategy.manual import ManualStrategy
 
         try:
-            fetcher = StockDataFetcher(source=data_source)
+            fetcher = _fetcher_for(data_source)
             df = fetcher.get_daily(symbol, start_date=start_date)
             if df is None or df.empty:
                 return {"symbol": symbol, "error": "无数据"}

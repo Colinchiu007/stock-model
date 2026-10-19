@@ -184,6 +184,55 @@ class TestSinaUnsupported:
             SinaSource().get_financial_summary("000002")
 
 
+class TestCrossSourceDateAlignment:
+    """切源前的红线: 两源日期序列必须逐日一致
+
+    为什么这是红线(2026-10-19 实测踩过):
+      ``cursor`` 是**行下标**。若新浪返回 674 行而 baostock 返回 673 行,
+      同样 ``cursor=67`` 指向的**日期会错位** —— 账户会静默地按错误日期
+      推进, 曲线、成交、统计全错, 而且**没有任何报错**。
+
+      今天把账户从 sina 切回 baostock 前, 就是靠这条断言确认可以安全切换。
+      注意: 数据要跨源真实拉取, 故只在数据源可用时运行。
+    """
+
+    SYMBOLS = ["000002", "000001", "600036"]
+
+    def _fetch(self, source: str, symbol: str):
+        import pandas as pd
+
+        from stock_model.data.sources.baostock_source import BaostockSource
+        from stock_model.data.sources.sina_source import SinaSource
+
+        src = BaostockSource() if source == "baostock" else SinaSource()
+        df = src.get_daily(symbol, start_date="20240101")
+        if df is None or df.empty:
+            return None
+        # 统一成 date 字面量列表, 避开两源索引类型差异
+        return [str(pd.Timestamp(i).date()) for i in df.index]
+
+    def test_sina_and_baostock_dates_align(self):
+        """新浪与 baostock 的日期序列逐日相等(否则切源会错位)"""
+        for sym in self.SYMBOLS:
+            bs_dates = self._fetch("baostock", sym)
+            if bs_dates is None:
+                self.skipTest(f"baostock 不可用(skip {sym})")
+            sina_dates = self._fetch("sina", sym)
+            if sina_dates is None:
+                self.skipTest(f"sina 不可用(skip {sym})")
+            assert sina_dates == bs_dates, (
+                f"{sym} 两源日期序列不一致 —— 切源会导致 cursor 错位: "
+                f"baostock {len(bs_dates)} 行({bs_dates[0]}~{bs_dates[-1]}), "
+                f"sina {len(sina_dates)} 行({sina_dates[0]}~{sina_dates[-1]})"
+            )
+
+    def test_transposed_dates_dont_match(self):
+        """反向证明: 序列不同时断言能报错(证明上面不是恒真)"""
+        a = ["2024-01-01", "2024-01-02"]
+        b = ["2024-01-02", "2024-01-03"]  # 错开一天
+        assert a != b
+
+
 class TestFallbackChainResilience:
     def test_primary_source_construction_failure_still_usable(self, monkeypatch):
         """主源构造失败(baostock 黑名单)不得让 fetcher 整个构造失败

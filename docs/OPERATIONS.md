@@ -248,6 +248,50 @@ STOCK_API_TOKEN=change-me-to-a-long-random-string
 | `alert_channel=(未接入告警通道)` | `.env` 是否配置 | §3 |
 | 端口被占 | `Get-NetTCPConnection -LocalPort 8123` | 确认是不是本项目服务再处理；**8000 的 everos 不要动** |
 | 测试/文档数字对不上 | CI 运行结果 | 以 CI 为准，回填时标来源（§4-8） |
+| 取数全部失败、三源全挂 | 逐个源单独测 | §5b |
+
+## 5b. 数据源切换（三源降级链）
+
+**数据源**：`akshare`（东方财富）/ `baostock`（证券宝）/ `sina`（新浪）。
+降级链有序：主源失败 → 逐个试备选，任一成功即返回。
+（`sina` 是 2026-10-19 加的第三个源：当天 baostock 拉黑 IP、
+akshare 被 RemoteDisconnected，两个既有源**同时**挂掉。）
+
+### 5b.1 判断哪个源可用
+
+```bash
+python -c "import baostock as b; r=b.login(); print(r.error_code, r.error_msg); b.logout()"
+# 10001011=黑名单用户(需等解封)；10002007=网络接收错误(临时抖动)
+```
+
+akshare 的报错是 `RemoteDisconnected`（域名 TCP 通但请求被断连）。
+sina 实测最稳（quotes.sina.cn 直连，0.1s）。
+
+### 5b.2 切换账户主源
+
+改 `data/paper/default.json` 的 `_metadata.data_source`（`akshare`/`baostock`/`sina`），
+然后重启服务（内存里已构造的 fetcher 不会自己更新）。
+
+⚠️ **切换前必须验两源日期序列逐日一致** —— `cursor` 是**行下标**，
+两源行数差 1 就会静默错位（日期整体偏移，无任何报错）：
+
+```bash
+python tests/test_sina_source.py -q -k "align"   # 红线测试
+```
+
+### 5b.3 切换后的自检
+
+1. `/api/paper/account` 能返回（账户能加载 = 引擎成功取到全部标的数据）
+2. `python scripts/paper_status.py` 交易日数/成交数与切换前一致
+3. 下一次定时推进 `last_status=ok`
+
+### 5b.4 已知环境问题（非代码缺陷）
+
+- `tests/test_data_sources.py::test_create_baostock` 在 baostock 拉黑期间会失败
+  （它真实调 login）；CI 上正常。
+- `tests/test_paper_core.py::TestDateWindow` 需要 2019 历史数据，本地跑会因
+  取数失败而红。
+- 本地全量测试建议：`--deselect tests/test_data_sources.py::TestCreateSource::test_create_baostock --deselect tests/test_paper_core.py::TestDateWindow`
 
 ## 6. WebSocket 推送（TD-06，**默认关闭**）
 
