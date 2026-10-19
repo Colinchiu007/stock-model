@@ -19,7 +19,9 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -27,6 +29,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from stock_model.config.settings import get_settings
 from stock_model.data.sources.akshare_source import AkshareSource
 from stock_model.data.sources.baostock_source import BaostockSource
+from stock_model.data.sources.sina_source import SinaSource
 from stock_model.data.storage import DataStorage
 
 if TYPE_CHECKING:
@@ -58,6 +61,65 @@ _CONNECTION_ERROR_PATTERNS = (
     "RetryError",
 )
 
+TZ = ZoneInfo("Asia/Shanghai")
+
+# A 股 15:00 收盘。日线当日不再变化, 收盘后缓存本可以留很久;
+# 但盘中留太久会让"下午的盘面"停留在早上拉的数据, 所以分两档。
+MARKET_CLOSE_HOUR = 15
+CACHE_TTL_INTRADAY = 3600  # 盘中: 1 小时(与原 settings 默认一致)
+CACHE_TTL_AFTER_CLOSE = 43200  # 收盘后: 12 小时(覆盖夜间 + 次日开盘前)
+
+
+def _effective_cache_ttl(base_ttl: int, now_hour: int) -> int:
+    """按当前时段选缓存 TTL
+
+    为什么需要
+    ----------
+    统一 TTL 的问题是: 盘中刚拉的数据, 到收盘后正好过期, 于是
+    "晚上跑定时 + 早上看盘" 和 "手动扫描" 每次都撞冷缓存。
+    实测(2026-10-19): 30 只标的 冷缓存 64.2s vs 热缓存 5.0s ——
+    慢的全部来自首次取数, 不是计算。
+
+    但也不能无脑调长: 盘中留太久, 用户下午看到的还是早上的数据。
+    故收盘后(``now_hour >= 15``)给长 TTL, 盘中维持短 TTL。
+
+    ``base_ttl`` 为配置值; 只在它比盘中档更短时才拉长, 尊重显式配置。
+    """
+    if now_hour >= MARKET_CLOSE_HOUR:
+        return max(base_ttl, CACHE_TTL_AFTER_CLOSE)
+    return base_ttl
+
+
+def warmup_symbols(
+    fetcher: StockDataFetcher,
+    symbols: list[str],
+    start_date: str = "20240101",
+) -> tuple[int, int]:
+    """后台预热一批标的的日线缓存
+
+    返回 ``(成功数, 失败数)``。单只失败只记录、不中断 ——
+    预热是纯优化, 绝不能让一只坏标的拖垮服务启动。
+
+    为什么需要
+    ----------
+    选股扫描慢在首次取数(每只 ~2s, 30 只 ~64s)。服务启动后
+    静默把常用池拉一遍, 用户第一次点"开始扫描"就是热缓存(约 5s)。
+    """
+    ok = 0
+    failed = 0
+    total = len(symbols)
+    logger.info(f"开始预热缓存: {total} 只 (并发=串行, baostock 单连接不可并发)")
+    for i, sym in enumerate(symbols, 1):
+        try:
+            fetcher.get_daily(sym, start_date=start_date)
+            ok += 1
+            logger.debug(f"预热 {i}/{total} {sym} 成功")
+        except Exception as e:  # 预热不能因单只失败而中断(单只坏标的只记录)
+            failed += 1
+            logger.warning(f"预热 {i}/{total} {sym} 失败: {type(e).__name__}: {e}")
+    logger.info(f"预热完成: 成功 {ok} / 失败 {failed} (共 {total})")
+    return ok, failed
+
 
 class StockDataFetcher:
     """股票数据获取器
@@ -74,42 +136,83 @@ class StockDataFetcher:
     """
 
     # 可用的数据源名称
-    AVAILABLE_SOURCES = ("akshare", "baostock")
+    AVAILABLE_SOURCES = ("akshare", "baostock", "sina")
 
     def __init__(self, source: str | None = None):
         self.settings = get_settings()
         self.source = source or self.settings.data.default_source
         self._setup_proxy()
         self._source_instance: DataSource | None = None
+        self._fallback_instances: list[DataSource] = []
+        # 单源降级引用(向后兼容既有测试/调用); 指向降级链第一个可用源
         self._fallback_instance: DataSource | None = None
         self._init_sources()
         # 缓存
         self._storage = DataStorage()
         self._cache_enabled = self.settings.data.cache_enabled
         self._cache_ttl = self.settings.data.cache_ttl
+        # 收盘后用更长的 TTL: 日线当日不再变化, 用盘中 TTL 会让
+        # 「每晚定时跑 + 早上看盘」每次都撞冷缓存(实测 30 只 64s -> 5s 的差别)
+        self._effective_ttl = _effective_cache_ttl(self._cache_ttl, now_hour=datetime.now(TZ).hour)
         logger.info(
             f"数据获取器初始化, 主数据源: {self.source}, "
-            f"自动降级: 已启用, 缓存: {'启用' if self._cache_enabled else '禁用'}"
+            f"自动降级: 已启用, 缓存: {'启用' if self._cache_enabled else '禁用'} "
+            f"(TTL={self._effective_ttl}s)"
         )
 
     def _init_sources(self) -> None:
-        """初始化数据源实例(双向自动降级)
+        """初始化数据源实例(主源 + 降级链)
 
-        两个方向都要能降级 —— 2026-10-13 凌晨实测教训: 账户落盘
-        data_source=baostock, baostock 整体抖动(login 挂起/10002007)时,
-        即使 akshare 可用也切不过去(原来只有 akshare→baostock 一个方向),
-        整个模拟盘瘫痪。备选源初始化失败(缺依赖/网络)不阻断主源可用性。
+        降级链的由来(两次实测教训):
+          - 2026-10-13: 只有 akshare→baostock 一个方向, 账户锁定 baostock
+            时它挂了却切不过去, 模拟盘瘫痪。
+          - 2026-10-19: baostock(10001011 黑名单/10002007) 与 akshare 底层
+            (东方财富 RemoteDisconnected) **同时**不可用 —— 两个源用尽,
+            选股/回测/定时推进全瘫。
+
+        所以备选不再是"另一个源", 而是**一个有序列表**:
+        主源失败逐个往后试, 任意一个成功即返回。
+        某源构造失败(缺依赖/网络)只记录、不阻断其余源。
         """
-        self._source_instance = self._create_source(self.source)
-
-        # 备选源 = 另一个可用源(与主源不同)
-        fallback_name = "baostock" if self.source == "akshare" else "akshare"
+        # 主源构造**也可能失败**(2026-10-19 实测: baostock 返回
+        # 10001011 黑名单, 而 BaostockSource.__init__ 里就 login 并直接抛,
+        # 于是 StockDataFetcher(source="baostock") 整个构造失败 ——
+        # 账户落盘 data_source=baostock 时服务启动即崩, 连降级链都进不去)。
+        # 故主源失败也只记录, 把可用源全放进链里继续试。
+        self._primary_error: Exception | None = None
+        self._source_instance = None
         try:
-            self._fallback_instance = self._create_source(fallback_name)
-            logger.info(f"备选数据源: {fallback_name} (自动降级已启用)")
-        except (ImportError, RuntimeError, OSError) as e:
-            logger.warning(f"{fallback_name}备选数据源初始化失败: {e}")
-            self._fallback_instance = None
+            self._source_instance = self._create_source(self.source)
+        except (ImportError, RuntimeError, OSError, ConnectionError, ValueError) as e:
+            self._primary_error = e
+            logger.error(
+                f"主数据源[{self.source}] 构造失败({type(e).__name__}: {e}), 将仅使用备选数据源"
+            )
+
+        self._fallback_instances = []
+        for name in self._fallback_order():
+            if name == self.source:
+                continue
+            try:
+                self._fallback_instances.append(self._create_source(name))
+                logger.info(f"备选数据源: {name} (自动降级已启用)")
+            except (ImportError, RuntimeError, OSError, ValueError) as e:
+                logger.warning(f"{name} 备选数据源初始化失败: {e}")
+
+        # 单源引用(向后兼容): 指向降级链第一个可用源
+        self._fallback_instance = self._fallback_instances[0] if self._fallback_instances else None
+        # 记录 __init__ 期间自动分配的值 —— 之后若 _fallback_instance 被换成
+        # 别的对象, 说明调用方显式覆盖了降级源(既有用例靠它注入假源)
+        self._init_assigned_fallback = self._fallback_instance
+
+    def _fallback_order(self) -> list[str]:
+        """降级顺序: 主源之外的所有源, 按"行情可用性"优先
+
+        sina 排前面: 它只提供行情(日/周/月线), 正好覆盖选股/回测/模拟推进
+        这三条主链路, 且实测不依赖前两者的上游; 2026-10-19 两个老源同时
+        挂掉时, 只有它还能出数据。
+        """
+        return [s for s in self.AVAILABLE_SOURCES if s != self.source]
 
     @staticmethod
     def _create_source(name: str) -> DataSource:
@@ -118,6 +221,8 @@ class StockDataFetcher:
             return AkshareSource()
         if name == "baostock":
             return BaostockSource()
+        if name == "sina":
+            return SinaSource()
         raise ValueError(f"不支持的数据源: {name}, 可选: {StockDataFetcher.AVAILABLE_SOURCES}")
 
     @staticmethod
@@ -168,55 +273,96 @@ class StockDataFetcher:
         """
         last_inner_error: Exception = RuntimeError("未知原因")
         primary_inner_error: Exception = last_inner_error
-        # 尝试主数据源
-        try:
-            method = getattr(self._source_instance, method_name)
-            result = method(*args, **kwargs)
-            if result is not None and not result.empty:
-                return result
-            # 空数据也尝试降级
-            logger.warning(f"[{self.source}] {method_name} 返回空数据，尝试备选数据源")
-        except Exception as e:
-            # RetryError 由 _is_connection_error 内部解包判定 ——
-            # 连接类错误重试耗尽必须触发降级(2026-10-11 真实故障)
-            inner_e = self.unwrap_retry_error(e)
-            primary_inner_error = inner_e
-            last_inner_error = inner_e
-            if self._is_connection_error(e) and self._fallback_instance is not None:
-                logger.warning(
-                    f"[{self.source}] {method_name} 连接失败: "
-                    f"{inner_e.__class__.__name__}: {inner_e}，"
-                    f"自动降级到 {self._fallback_instance.name}"
-                )
-            else:
-                # 非连接错误，不降级，直接抛出(解包后的内层, 根因可见)
-                raise inner_e from e
-
-        # 尝试备选数据源
-        if self._fallback_instance is not None:
+        primary_raised: Exception | None = None  # 主源抛出的原始异常(无备选时要原样抛出)
+        # 尝试主数据源(构造失败时 _source_instance 为 None, 直接进降级链)
+        if self._source_instance is not None:
             try:
-                method = getattr(self._fallback_instance, method_name)
+                method = getattr(self._source_instance, method_name)
                 result = method(*args, **kwargs)
                 if result is not None and not result.empty:
-                    logger.info(f"[{self._fallback_instance.name}] {method_name} 降级获取成功")
                     return result
-                logger.warning(f"[{self._fallback_instance.name}] {method_name} 也返回空数据")
+                # 空数据也尝试降级
+                logger.warning(f"[{self.source}] {method_name} 返回空数据，尝试备选数据源")
+            except Exception as e:
+                # RetryError 由 _is_connection_error 内部解包判定 ——
+                # 连接类错误重试耗尽必须触发降级(2026-10-11 真实故障)
+                inner_e = self.unwrap_retry_error(e)
+                primary_inner_error = inner_e
+                last_inner_error = inner_e
+                primary_raised = inner_e
+                if not self._is_connection_error(e):
+                    # 非连接错误，不降级，直接抛出(解包后的内层, 根因可见)
+                    raise inner_e from e
+                logger.warning(
+                    f"[{self.source}] {method_name} 连接失败: "
+                    f"{inner_e.__class__.__name__}: {inner_e}，尝试备选数据源"
+                )
+        # 主源构造就没成功: 记录其原因, 直接进降级链
+        elif self._primary_error is not None:
+            primary_inner_error = self._primary_error
+            primary_raised = self._primary_error
+            last_inner_error = self._primary_error
+            logger.warning(
+                f"[{self.source}] 主数据源不可用({type(self._primary_error).__name__}: "
+                f"{self._primary_error})，尝试备选数据源"
+            )
+
+        # 依次尝试降级链上的每个源(2026-10-19: 两个老源同时挂掉,
+        # 必须有第三个能顶上, 否则选股/回测/定时推进全瘫)
+        #
+        # 兼容两种表示:
+        #   - ``_fallback_instance``(单源)若与 _init_sources 记录的不同, 说明
+        #     被显式覆盖(既有用例/调用方就是用它注入假源), **优先于**列表;
+        #   - 否则用 ``_fallback_instances`` 列表(正常路径);
+        #   - 列表不存在时(``object.__new__`` 绕开 __init__ 的测试)回退读单源。
+        chain: list[DataSource] = list(getattr(self, "_fallback_instances", None) or [])
+        single = getattr(self, "_fallback_instance", None)
+        init_assigned = getattr(self, "_init_assigned_fallback", None)
+        if single is not None and single is not init_assigned:
+            # 显式覆盖过单源: 只用它, 忽略列表(尊重调用方的指定)
+            chain = [single]
+        elif not chain and single is not None:
+            chain = [single]
+
+        if not chain:
+            # 无备选源时, 主源的连接错误直接抛出(保留原始异常类型,
+            # 不包成 RuntimeError —— 调用方按类型判断的逻辑不能被改)
+            if primary_raised is not None:
+                raise primary_raised
+            # 主源只是返回了空数据: 无备选可试, 按"无数据"抛出
+            raise RuntimeError(f"数据获取失败: 主数据源[{self.source}]返回空数据且无备选数据源")
+
+        attempts: list[str] = []
+        for fb in chain:
+            name = getattr(fb, "name", fb.__class__.__name__)
+            try:
+                method = getattr(fb, method_name)
+            except AttributeError:
+                # 该源没有这个能力(如新浪没有估值接口)—— 跳过, 不是错误
+                logger.info(f"[{name}] 不支持 {method_name}, 跳过")
+                attempts.append(f"{name}: 不支持该能力")
+                continue
+            try:
+                result = method(*args, **kwargs)
+                if result is not None and not result.empty:
+                    logger.info(f"[{name}] {method_name} 降级获取成功")
+                    return result
+                logger.warning(f"[{name}] {method_name} 返回空数据")
+                attempts.append(f"{name}: 返回空数据")
             except Exception as fallback_error:
                 # 加 RetryError 并解包: 备选源也可能用 tenacity(漏捕会穿透给用户)
                 inner = self.unwrap_retry_error(fallback_error)
                 last_inner_error = inner
-                logger.error(
-                    f"[{self._fallback_instance.name}] {method_name} 也失败: "
-                    f"{inner.__class__.__name__}: {inner}"
-                )
+                logger.error(f"[{name}] {method_name} 也失败: {inner.__class__.__name__}: {inner}")
+                attempts.append(f"{name}: {inner.__class__.__name__}: {inner}")
 
         # 根因**拼进消息文本**(而不是只挂在异常链上):
         # 前端展示的就是 str(e), 异常链用户看不到
+        tried = "; ".join(attempts) if attempts else "无备选数据源"
         raise RuntimeError(
             f"数据获取失败: 主数据源[{self.source}]和备选数据源均无法获取数据 "
             f"(主源原因: {primary_inner_error.__class__.__name__}: "
-            f"{primary_inner_error}; 备选原因: "
-            f"{last_inner_error.__class__.__name__}: {last_inner_error})"
+            f"{primary_inner_error}; 各备选源: {tried})"
         ) from last_inner_error
 
     def _setup_proxy(self) -> None:
@@ -307,7 +453,7 @@ class StockDataFetcher:
         if self._cache_enabled:
             key = self._cache_key(method, symbol, **kwargs)
             try:
-                cached = self._storage.cache_get_with_ttl(key, self._cache_ttl)
+                cached = self._storage.cache_get_with_ttl(key, self._effective_ttl)
                 if cached is not None:
                     logger.info(f"缓存命中: {key} ({len(cached)} 条)")
                     return cached

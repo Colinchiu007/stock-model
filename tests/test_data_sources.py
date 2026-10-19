@@ -403,7 +403,7 @@ class TestCacheKey:
 class TestCacheIntegration:
     """缓存集成测试 (mock DataStorage)"""
 
-    def _make_fetcher_with_cache(self, cache_enabled=True, cache_ttl=3600):
+    def _make_fetcher_with_cache(self, cache_enabled=True, cache_ttl=3600, effective_ttl=None):
         """创建带缓存mock的fetcher"""
         fetcher = object.__new__(StockDataFetcher)
         fetcher.settings = MagicMock()
@@ -413,6 +413,9 @@ class TestCacheIntegration:
         fetcher._storage = MagicMock()
         fetcher._cache_enabled = cache_enabled
         fetcher._cache_ttl = cache_ttl
+        # 生效 TTL: 收盘后会比 _cache_ttl 长(见 fetcher._effective_cache_ttl),
+        # 这里默认与 base 一致, 便于断言"盘中按配置传下去"
+        fetcher._effective_ttl = cache_ttl if effective_ttl is None else effective_ttl
         return fetcher
 
     def test_cache_hit_returns_cached_data(self):
@@ -470,7 +473,7 @@ class TestCacheIntegration:
         fetcher._storage.cache_set.assert_not_called()
 
     def test_cache_ttl_passed_correctly(self):
-        """TTL参数正确传递"""
+        """生效 TTL 正确传递到存储层"""
         fetcher = self._make_fetcher_with_cache(cache_ttl=1800)
         fetcher._storage.cache_get_with_ttl.return_value = None
         fresh_df = pd.DataFrame({"close": [11.0]}, index=pd.to_datetime(["2024-01-01"]))
@@ -480,6 +483,20 @@ class TestCacheIntegration:
         fetcher._storage.cache_get_with_ttl.assert_called_once()
         call_args = fetcher._storage.cache_get_with_ttl.call_args
         assert call_args[0][1] == 1800
+
+    def test_cache_uses_effective_ttl_not_base(self):
+        """收盘后用生效 TTL(比 base 长), 而不是把 base 原样传下去"""
+        from stock_model.data.fetcher import CACHE_TTL_AFTER_CLOSE
+
+        fetcher = self._make_fetcher_with_cache(cache_ttl=3600, effective_ttl=CACHE_TTL_AFTER_CLOSE)
+        fetcher._storage.cache_get_with_ttl.return_value = None
+        fresh_df = pd.DataFrame({"close": [11.0]}, index=pd.to_datetime(["2024-01-01"]))
+        fetcher._source_instance.get_daily.return_value = fresh_df
+
+        fetcher._get_with_cache("get_daily", "000001")
+        used = fetcher._storage.cache_get_with_ttl.call_args[0][1]
+        assert used == CACHE_TTL_AFTER_CLOSE, f"应收盘后长 TTL, 实际 {used}"
+        assert used > 3600, "收盘后 TTL 必须比盘中 base 更长"
 
 
 # ============================================================
