@@ -592,11 +592,20 @@ class TestRestore:
         assert cfg["jobs"]["default"]["hour"] == 16
         assert cfg["jobs"]["default"]["days"] == 2
 
-    def test_config_cleared_on_stop(self, live_sched, tmp_path):
+    def test_config_marked_stopped_not_deleted_on_stop(self, live_sched, tmp_path):
+        """停止后**保留**账户记录并标记 running=False, 而不是删掉
+
+        契约变更(2026-10-19): 早期实现 stop() 把账户从 schedule.json 里
+        删除, 连同累计统计一起抹掉。last_run_at 归零会让兜底脚本误判
+        "今天没跑过" 再推进一个交易日(重复撮合风险)。
+        现在停止 = 保留统计 + 标记 running=False, restore() 不会重启它。
+        见 tests/test_scheduler_stop_preserves_stats.py。
+        """
         live_sched.start("default")
         live_sched.stop("default")
         cfg = json.loads((tmp_path / "schedule.json").read_text(encoding="utf-8"))
-        assert cfg["jobs"] == {}
+        assert "default" in cfg["jobs"], "停止后不应删除账户记录"
+        assert cfg["jobs"]["default"]["running"] is False
 
     def test_no_config_means_no_scheduler(self, tmp_path):
         """没有配置文件时不启动调度器 —— 否则每个进程都会凭空起后台线程"""
