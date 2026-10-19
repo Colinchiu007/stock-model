@@ -138,6 +138,12 @@ class PaperScheduler:
     ) -> None:
         self._schedule_file = schedule_file or DEFAULT_SCHEDULE_FILE
         self._states: dict[str, ScheduleState] = {}
+        # 已停止账户的"配置 + 累计统计"快照。
+        # 停止 ≠ 清空历史: 早期实现 stop() 直接 pop 掉 state 再落盘,
+        # 等于把该账户的统计从 schedule.json 里删掉 —— 再开启时从 0 开始,
+        # 而 last_run_at 归零会让兜底脚本误判"今天没跑过"并重复推进。
+        # 见 tests/test_scheduler_stop_preserves_stats.py。
+        self._paused: dict[str, dict[str, Any]] = {}
         self._scheduler: Any = None
         self._runner: Callable[[str, int], dict[str, Any]] | None = None
         self._alerter: Callable[[str], None] | None = None
@@ -298,6 +304,8 @@ class PaperScheduler:
             )
 
             self._states[account_id] = state
+            # 重新开启了: 清掉"已停止"快照, 否则 _save_config 会同时存在两份记录
+            self._paused.pop(account_id, None)
             if persist:
                 self._save_config()
 
@@ -307,14 +315,30 @@ class PaperScheduler:
             return self.status(account_id)
 
     def stop(self, account_id: str = "default", *, persist: bool = True) -> dict[str, Any]:
-        """停止定时运行"""
+        """停止定时运行(**保留累计统计**)
+
+        停止与清空历史是两件事: 统计快照进 ``_paused``,
+        落盘时标记 ``running=False``, 下次 start 仍能继承
+        (``last_run_at`` 归零会让兜底误判"今天没跑过", 见 ``_paused`` 注释)。
+        """
         with self._lock:
             if self._scheduler is not None:
                 self._scheduler.remove_job(self._job_id(account_id))
-            self._states.pop(account_id, None)
+            state = self._states.pop(account_id, None)
+            snapshot = self._snapshot_of(state)
+            if snapshot is None:
+                # 内存里没有(如重启后恢复时被跳过的已停止账户): 用磁盘上的记录
+                cfg = self._load_config().get(account_id)
+                snapshot = dict(cfg) if isinstance(cfg, dict) else None
+            if snapshot is not None:
+                snapshot["running"] = False
+                self._paused[account_id] = snapshot
             if persist:
                 self._save_config()
-            logger.info(f"[paper-schedule] 账户 {account_id} 定时任务已停止")
+            logger.info(
+                f"[paper-schedule] 账户 {account_id} 定时任务已停止"
+                f"(累计统计已保留: run_count={snapshot.get('run_count', 0) if snapshot else 0})"
+            )
             return {"status": "stopped", "account_id": account_id}
 
     def shutdown(self) -> None:
@@ -662,42 +686,63 @@ class PaperScheduler:
         "last_alert_error",
     )
 
+    def _snapshot_of(self, state: ScheduleState | None) -> dict[str, Any] | None:
+        """把一个在跑状态的「触发配置 + 累计统计」拍成可落盘的快照"""
+        if state is None:
+            return None
+        return {
+            "trigger_type": state.trigger_type,
+            "hour": state.hour,
+            "minute": state.minute,
+            "days": state.days,
+            "interval_minutes": state.interval_minutes,
+            "timezone": state.timezone,
+            "started_at": state.started_at,
+            "running": True,
+            **{k: getattr(state, k) for k in self._STAT_KEYS},
+        }
+
     def _new_state_inheriting_stats(self, account_id: str) -> ScheduleState:
-        """新建状态, 但**继承磁盘上已有的运行统计**
+        """新建状态, 但**继承已有的运行统计**
 
         为什么不直接 ScheduleState(): start() 会 _save_config() 落盘。
         若内存里没有该账户状态(重启后第一次 start), 直接新建全 0 状态会
         把磁盘上的历史统计**覆盖成 0** —— 兜底脚本随后读到 last_run_at=''
         认为"今天没跑过", 再推进一个交易日(重复撮合风险)。
         实测: 2026-10-13 重启后 start 抹掉了 23:30 那次真实运行的统计。
+
+        查找顺序: 内存里的已停止快照 -> 磁盘配置。
+        (stop() 之后磁盘上标记 running=False, ``_load_config`` 仍能读到统计)
         """
         state = ScheduleState(account_id=account_id)
-        cfg = self._load_config().get(account_id) or {}
-        if isinstance(cfg, dict):
+        cfg = self._paused.get(account_id) or {}
+        if not cfg:
+            disk = self._load_config().get(account_id)
+            cfg = disk if isinstance(disk, dict) else {}
+        if cfg:
             for k in self._STAT_KEYS:
                 if k in cfg:
                     setattr(state, k, cfg[k])
             if cfg.get("run_count"):
                 logger.info(
                     f"[paper-schedule] 账户 {account_id} 继承已有运行统计: "
-                    f"run_count={state.run_count} last_status={state.last_status or '—'}"
+                    f"run_count={state.run_count} last_status={state.last_status or '—'} "
+                    f"last_run_at={state.last_run_at or '—'}"
                 )
         return state
 
     def _save_config(self) -> None:
-        jobs = {
-            account_id: {
-                "trigger_type": s.trigger_type,
-                "hour": s.hour,
-                "minute": s.minute,
-                "days": s.days,
-                "interval_minutes": s.interval_minutes,
-                "timezone": s.timezone,
-                "started_at": s.started_at,
-                **{k: getattr(s, k) for k in self._STAT_KEYS},
-            }
-            for account_id, s in self._states.items()
+        """落盘定时配置
+
+        在跑的任务写 ``running=True``; 已停止的任务从 ``_paused`` 写
+        ``running=False`` —— **保留其统计**, 但 ``restore()`` 不会重启它。
+        """
+        jobs: dict[str, dict[str, Any]] = {
+            account_id: self._snapshot_of(s) or {} for account_id, s in self._states.items()
         }
+        for account_id, cfg in self._paused.items():
+            if account_id not in jobs:
+                jobs[account_id] = dict(cfg, running=False)
         try:
             write_json_atomic(self._schedule_file, {"version": 1, "jobs": jobs})
         except OSError as e:
@@ -733,6 +778,15 @@ class PaperScheduler:
         for account_id, cfg in jobs.items():
             if not isinstance(cfg, dict):
                 logger.error(f"[paper-schedule] 账户 {account_id} 的配置格式异常, 已跳过")
+                continue
+            # 已停止的任务: 保留统计快照, 但**不自动恢复运行**
+            # (缺 running 字段 = 旧格式, 按"在跑"处理, 保持向后兼容)
+            if cfg.get("running") is False:
+                self._paused[account_id] = dict(cfg)
+                logger.info(
+                    f"[paper-schedule] 账户 {account_id} 处于已停止状态, 不恢复运行"
+                    f"(统计已保留: run_count={cfg.get('run_count', 0)})"
+                )
                 continue
             try:
                 self.start(
