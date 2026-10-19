@@ -23,6 +23,54 @@ from loguru import logger
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+import threading
+import time
+import uuid
+
+# 扫描进度: request_id -> {"done","total","updated_at"}。
+# 只为消除前端"黑屏 60 秒"的困惑, 不参与业务判断。
+_SCAN_PROGRESS_TTL = 300.0  # 秒; 过期记录在查询/结束时清理
+_scan_progress: dict[str, dict] = {}
+_progress_lock = threading.Lock()
+
+
+def _prune_progress() -> None:
+    """清掉过期的扫描进度记录"""
+    now = time.monotonic()
+    with _progress_lock:
+        for rid in [
+            rid for rid, v in _scan_progress.items() if now - v.get("_ts", 0) > _SCAN_PROGRESS_TTL
+        ]:
+            _scan_progress.pop(rid, None)
+
+
+def _scan_with_progress(
+    symbol_list: list[str],
+    data_source: str,
+    start_date: str,
+    strategy_cls: Callable[[], Any],
+    min_rows: int,
+    on_progress: Callable[[int, int], None] | None = None,
+) -> list[dict]:
+    """串行扫描并逐只上报进度
+
+    进度回调用来消除"扫 30 只黑屏 60 秒"的空窗感 —— 前端把
+    ``on_progress`` 接到一个轮询端点即可显示"已扫描 12/30"。
+
+    串行的理由(见 register_routes 里同样的注释): baostock 是全局单连接,
+    并发查询会互相抢占响应导致 RuntimeError(实测复现)。正确性优先。
+    """
+    items: list[dict] = []
+    total = len(symbol_list)
+    for i, sym in enumerate(symbol_list, 1):
+        items.append(_analyze_one(sym, data_source, start_date, strategy_cls, min_rows))
+        if on_progress is not None:
+            try:
+                on_progress(i, total)
+            except Exception as e:  # 进度上报失败绝不能影响扫描结果
+                logger.debug(f"进度回调异常(已忽略): {type(e).__name__}: {e}")
+    return items
+
 
 def _signal_to_dict(signal: Any) -> dict:
     """Signal 对象转 dict"""
@@ -126,6 +174,7 @@ def register_screener_routes(app: Any) -> None:
         min_rows: int = 60,
         limit: int = 20,
         sort_by: str = "score",
+        request_id: str = "",
     ) -> dict:
         """批量扫描选股榜
 
@@ -146,14 +195,46 @@ def register_screener_routes(app: Any) -> None:
         if not symbol_list:
             return {"results": [], "summary": {"total": 0}}
 
-        # 串行而非并发: baostock 是全局单连接, 其 query_* 接口不线程安全,
-        # 并发查询会互相抢占响应导致 RuntimeError(实测复现)。
-        # akshare 走 HTTP 本身可以并发, 但数据源由调用方指定, 无法在此区分,
-        # 因此统一串行 —— 扫描数量有限时耗时可接受, 正确性优先。
-        items: list[dict] = [
-            _analyze_one(sym, data_source, start_date, ManualStrategy, min_rows)
-            for sym in symbol_list
-        ]
+        # 进度上报: 让前端能显示"已扫描 N/M", 消除 60 秒黑屏的困惑。
+        # request_id 由调用方(前端)生成: 请求还在飞的时候它就已经知道
+        # 该去轮询哪个 id 了 —— 用响应里的 id 就晚了(响应=扫描结束)。
+        rid = (request_id or "").strip()[:32] or uuid.uuid4().hex[:12]
+        request_id = rid
+
+        def _on_progress(done: int, total: int) -> None:
+            with _progress_lock:
+                _scan_progress[request_id] = {
+                    "done": done,
+                    "total": total,
+                    "updated_at": datetime.now().isoformat(),
+                    "_ts": time.monotonic(),
+                }
+
+        with _progress_lock:
+            _scan_progress[request_id] = {
+                "done": 0,
+                "total": len(symbol_list),
+                "updated_at": datetime.now().isoformat(),
+                "_ts": time.monotonic(),
+            }
+
+        try:
+            # 串行而非并发: baostock 是全局单连接, 其 query_* 接口不线程安全,
+            # 并发查询会互相抢占响应导致 RuntimeError(实测复现)。
+            # akshare 走 HTTP 本身可以并发, 但数据源由调用方指定, 无法在此区分,
+            # 因此统一串行 —— 扫描数量有限时耗时可接受, 正确性优先。
+            # (提速靠缓存预热 + TTL, 不靠并发 —— 见 docs/SCREENER_PERF.md)
+            items = _scan_with_progress(
+                symbol_list,
+                data_source,
+                start_date,
+                ManualStrategy,
+                min_rows,
+                on_progress=_on_progress,
+            )
+        finally:
+            # 进度记录保留一段时间供前端读取最终状态, 过期由查询时清理
+            _prune_progress()
 
         # 排序: 分数降序, 失败项沉底
         key_map = {
@@ -176,7 +257,31 @@ def register_screener_routes(app: Any) -> None:
                 "failed": sum(1 for r in items if r["error"]),
                 "action_counts": action_counts,
                 "generated_at": datetime.now().isoformat(),
+                "request_id": request_id,
             },
+        }
+
+    @app.get("/api/screener/progress")
+    def screener_progress(request_id: str) -> dict:
+        """查询某次扫描的进度(前端轮询用)
+
+        返回 ``{"request_id","done","total","finished"}``。
+        未知/过期的 request_id 返回 ``finished=True``(前端据此停止轮询),
+        而不是 404 —— 轮询端点的"查不到"是正常状态, 不是错误。
+        """
+        _prune_progress()
+        with _progress_lock:
+            rec = _scan_progress.get(request_id)
+        if rec is None:
+            return {"request_id": request_id, "done": 0, "total": 0, "finished": True}
+        done = int(rec.get("done", 0))
+        total = int(rec.get("total", 0))
+        return {
+            "request_id": request_id,
+            "done": done,
+            "total": total,
+            "finished": total > 0 and done >= total,
+            "updated_at": rec.get("updated_at"),
         }
 
     @app.get("/api/analyze/{symbol}")

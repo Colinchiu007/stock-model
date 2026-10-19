@@ -63,19 +63,41 @@ $('btn-scan').addEventListener('click', async () => {
     symbols,
     data_source: $('sc-source').value,
     start_date: $('sc-start').value.trim() || '20240101',
+    request_id: scanRequestId(),
   });
+
+  // 轮询进度: 30 只冷缓存约 60 秒, 没有进度用户只能盯着转圈。
+  // 端点是 def(线程池), 轮询不会影响扫描本身。
+  const started = Date.now();
+  const tick = setInterval(async () => {
+    try {
+      const p = await api('/api/screener/progress?request_id=' + encodeURIComponent(qs.get('request_id')));
+      if (p.total > 0) {
+        $('sc-loading-text').textContent = `扫描中 ${p.done}/${p.total}…`;
+      }
+    } catch (_) { /* 进度查询失败不影响主流程 */ }
+  }, 1000);
 
   try {
     const data = await api('/api/screener?' + qs);
     renderScreener(data);
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
+    const s = data.summary || {};
+    $('sc-loading-text').textContent =
+      `扫描完成：${s.scanned ?? 0} 只，用时 ${secs}s`;
   } catch (e) {
     $('sc-body').innerHTML =
       `<tr class="empty-row"><td colspan="11">扫描失败：${esc(e.message)}</td></tr>`;
   } finally {
+    clearInterval(tick);
     btn.disabled = false;
     show($('sc-loading'), false);
   }
 });
+
+function scanRequestId() {
+  return 'ui' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
 
 function renderScreener(data) {
   const s = data.summary || {};
