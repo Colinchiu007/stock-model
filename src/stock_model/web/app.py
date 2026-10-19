@@ -15,6 +15,9 @@ Web Dashboard 应用
 from __future__ import annotations
 
 import json
+import os
+import sys
+import threading
 import time
 from collections import deque
 from datetime import datetime
@@ -221,6 +224,33 @@ def _app_middleware(app: Any):
         return fn
 
     return _register
+
+
+# 启动预热用的常用股票池 = 前端选股页的默认值(用户最常扫的就是这几个)。
+# 放在这里而不是配置项: 它是"体验默认值", 不是业务配置。
+_WARMUP_SYMBOLS = ("000001", "000002", "600036", "000651", "600519")
+
+
+def _is_pytest() -> bool:
+    """是否运行在 pytest 下(测试里不该起真联网的后台线程)"""
+    return "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
+
+
+def _warmup_common_pool() -> None:
+    """后台预热常用股票池的日线缓存
+
+    实测(2026-10-19): 30 只标的 冷缓存 64.2s vs 热缓存 5.0s ——
+    慢的全部来自首次取数(每只 ~2s), 与计算无关。
+
+    在后台线程跑: 预热纯属优化, 任何失败都不能影响服务可用性,
+    更不能拖慢启动(调用方是 daemon 线程, 且整体 try/except)。
+    """
+    try:
+        from stock_model.data.fetcher import StockDataFetcher, warmup_symbols
+
+        warmup_symbols(StockDataFetcher(), list(_WARMUP_SYMBOLS))
+    except Exception as e:
+        logger.warning(f"常用股票池预热跳过: {type(e).__name__}: {e}")
 
 
 def create_app(config: dict | None = None) -> Any:
@@ -877,6 +907,17 @@ def create_app(config: dict | None = None) -> Any:
                 logger.error(f"模拟盘定时任务未能恢复: {_restored['error']}")
         except ImportError as err:  # pragma: no cover - 仅在缺可选依赖时
             logger.error(f"模拟盘定时任务恢复不可用: {err}")
+
+        # 启动后后台预热常用股票池的日线缓存。
+        # 目的: 用户点"开始扫描"时命中缓存(实测 30 只 冷缓存 64s vs 热缓存 5s)。
+        # 放后台线程: 预热是纯优化, 绝不能拖慢/阻塞服务启动。
+        #
+        # 门控: pytest 下**不起**。create_app() 在测试里被反复调用, 每建一个
+        # app 就起一个真联网线程 —— 2026-10-19 实测导致 pytest 进程在用例
+        # 收尾阶段崩溃(Windows fatal), 且污染后续用例(31 个无关测试变红)。
+        # 预热是部署期的行为, 测试只需要"它被正确调用"这一点(见 warmup 测试)。
+        if not _is_pytest():
+            threading.Thread(target=_warmup_common_pool, name="warmup-pool", daemon=True).start()
 
         return app
 

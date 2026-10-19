@@ -29,6 +29,23 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 pytestmark = pytest.mark.importorskip("baostock")
 
 
+class _OneShotBoom:
+    """最小的"永远失败"数据源: 任何方法都抛给定异常"""
+
+    def __init__(self, exc: Exception | None = None):
+        self.name = "boom"
+        self._exc = exc or RuntimeError("远程主机强迫关闭了一个现有的连接")
+
+    def get_daily(self, *a, **k):
+        raise self._exc
+
+    def __getattr__(self, item):
+        def _raise(*a, **k):
+            raise self._exc
+
+        return _raise
+
+
 def _stale_session_source():
     """模拟服务里那个"登录态为 True 但会话已死"的源实例"""
     from stock_model.data.sources import baostock_source as bs_mod
@@ -128,17 +145,46 @@ class TestRetryReraise:
         assert not missing, "以下 @retry 缺 reraise=True:\n  " + "\n  ".join(missing)
 
     def test_get_daily_raises_real_error_not_retry_error(self):
-        """行为锁: 源持续抛连接错误时 get_daily 最终抛真实 RuntimeError(非 RetryError)"""
+        """行为锁: 源持续抛连接错误时, **最终异常保留真实根因**, 且不是 RetryError
+
+        契约说明(2026-10-19 更新):
+          原用例靠"没有备选源"来观察主源异常, 现已不成立 ——
+          fetcher 现在有降级链(akshare/baostock/sina), baostock 失败会自动
+          往下试, 全部失败后抛 RuntimeError, 其中内嵌各源真实原因。
+
+          要保护的东西没变: 用户看到的必须是被解包的真实异常, 不是
+          tenacity 的 RetryError 壳, 否则前端只会显示
+          "RetryError[<Future ...>]"(2026-10-11 真实故障)。
+        """
         from tenacity import RetryError
 
         from stock_model.data.fetcher import StockDataFetcher
 
-        f = StockDataFetcher(source="baostock")  # 无备选源
-        with patch.object(
-            f._source_instance,
-            "get_daily",
-            side_effect=RuntimeError("远程主机强迫关闭了一个现有的连接"),
-        ):
-            with pytest.raises(RuntimeError, match="远程主机强迫关闭") as e:
-                f.get_daily("000001")
+        # 绕过 __init__: 只装主源, 降级链留空 —— 语义等价于"只有这一个源"
+        f = object.__new__(StockDataFetcher)
+        f.source = "baostock"
+        f._source_instance = _OneShotBoom()
+        f._primary_error = None
+        f._fallback_instances = []
+        f._fallback_instance = None
+        f._init_assigned_fallback = None
+
+        with pytest.raises(RuntimeError, match="远程主机强迫关闭") as e:
+            f._execute_with_fallback("get_daily", "000001")
         assert not isinstance(e.value, RetryError)
+
+    def test_retry_error_is_unwrapped_in_final_message(self):
+        """锁: 各源都抛 RetryError 时, 最终错误里必须出现内层真实原因文本"""
+        from stock_model.data.fetcher import StockDataFetcher
+
+        f = object.__new__(StockDataFetcher)
+        f.source = "baostock"
+        f._source_instance = _OneShotBoom(RuntimeError("远程主机强迫关闭了一个现有的连接"))
+        f._primary_error = None
+        f._fallback_instances = []
+        f._fallback_instance = None
+        f._init_assigned_fallback = None
+
+        with pytest.raises(RuntimeError, match="远程主机强迫关闭") as e:
+            f._execute_with_fallback("get_daily", "000001")
+        assert "RetryError" not in str(e.value), f"不该把 RetryError 壳抛给用户: {e.value}"
