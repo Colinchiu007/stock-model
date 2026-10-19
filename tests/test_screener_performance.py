@@ -27,6 +27,57 @@ from __future__ import annotations
 # ==================== 归因修正: 真正的瓶颈(耗时占 99%) ====================
 
 
+class TestWarmupPool:
+    """预热池 = 默认池 + 账户实际标的
+
+    2026-10-19 发现硬编码池和账户标的脱节: 账户是 000002/000001/600036,
+    预热却只按前端默认 5 只 —— 用户改了账户标的后预热就白做。
+    """
+
+    def test_includes_account_symbols(self, monkeypatch):
+        import stock_model.web.app as appmod
+
+        # _warmup_symbols 内部是 `from stock_model.paper.store import load_metadata`,
+        # 所以要 patch **源模块**的属性, 而不是 appmod 上的名字
+        monkeypatch.setattr(
+            "stock_model.paper.store.load_metadata",
+            lambda aid: {"symbols": ["600000", "000001"]},
+        )
+        syms = appmod._warmup_symbols()
+        assert "600000" in syms, "账户标的必须进预热池"
+        assert "000001" in syms
+        for d in appmod._DEFAULT_WARMUP_SYMBOLS:
+            assert d in syms, "默认池应保留"
+
+    def test_dedupes_overlap(self, monkeypatch):
+        import stock_model.web.app as appmod
+
+        monkeypatch.setattr(
+            "stock_model.paper.store.load_metadata",
+            lambda aid: {"symbols": ["000001"]},
+        )
+        syms = appmod._warmup_symbols()
+        assert syms.count("000001") == 1, "不得重复"
+        assert len(syms) == len(set(syms))
+
+    def test_survives_metadata_failure(self, monkeypatch):
+        """读不到账户元数据时退回默认池, 不能抛异常拖垮启动"""
+        import stock_model.web.app as appmod
+
+        def _boom(aid):
+            raise OSError("磁盘故障")
+
+        monkeypatch.setattr("stock_model.paper.store.load_metadata", _boom)
+        syms = appmod._warmup_symbols()
+        assert syms == list(appmod._DEFAULT_WARMUP_SYMBOLS)
+
+    def test_skipped_under_pytest(self):
+        """pytest 下不起预热线程(会真联网, 收尾阶段崩溃)"""
+        import stock_model.web.app as appmod
+
+        assert appmod._is_pytest() is True, "本测试运行中应识别为 pytest"
+
+
 class TestFetcherReuse:
     """同一次扫描内必须复用同一个 fetcher"""
 

@@ -226,9 +226,31 @@ def _app_middleware(app: Any):
     return _register
 
 
-# 启动预热用的常用股票池 = 前端选股页的默认值(用户最常扫的就是这几个)。
-# 放在这里而不是配置项: 它是"体验默认值", 不是业务配置。
-_WARMUP_SYMBOLS = ("000001", "000002", "600036", "000651", "600519")
+# 启动预热用的默认股票池 = 前端选股页的默认值。
+# 注意: **账户实际标的会追加进来**(见 _warmup_symbols) ——
+# 2026-10-19 发现硬编码池和账户标的脱节: 账户是 000002/000001/600036,
+# 预热却只按前端默认 5 只, 用户改了账户标的后预热就白做。
+_DEFAULT_WARMUP_SYMBOLS = ("000001", "000002", "600036", "000651", "600519")
+
+
+def _warmup_symbols() -> list[str]:
+    """预热池 = 默认池 + 账户实际标的(去重)
+
+    账户标的最重要: 每天 15:30 定时推进、以及"打开账户看持仓"都要取这几只。
+    漏了它们, 预热做足也挡不住定时任务冷启动(实测冷/热差 12.8 倍)。
+    """
+    symbols = list(_DEFAULT_WARMUP_SYMBOLS)
+    try:
+        from stock_model.paper.store import load_metadata
+
+        meta = load_metadata("default") or {}
+        for raw in meta.get("symbols") or []:
+            s = str(raw).strip()
+            if s and s not in symbols:
+                symbols.append(s)
+    except Exception as e:  # 预热池拼不齐也不能影响启动
+        logger.debug(f"读取账户标的失败(预热池用默认值): {type(e).__name__}: {e}")
+    return symbols
 
 
 def _is_pytest() -> bool:
@@ -237,7 +259,7 @@ def _is_pytest() -> bool:
 
 
 def _warmup_common_pool() -> None:
-    """后台预热常用股票池的日线缓存
+    """后台预热股票池的日线缓存
 
     实测(2026-10-19): 30 只标的 冷缓存 64.2s vs 热缓存 5.0s ——
     慢的全部来自首次取数(每只 ~2s), 与计算无关。
@@ -248,9 +270,9 @@ def _warmup_common_pool() -> None:
     try:
         from stock_model.data.fetcher import StockDataFetcher, warmup_symbols
 
-        warmup_symbols(StockDataFetcher(), list(_WARMUP_SYMBOLS))
+        warmup_symbols(StockDataFetcher(), _warmup_symbols())
     except Exception as e:
-        logger.warning(f"常用股票池预热跳过: {type(e).__name__}: {e}")
+        logger.warning(f"股票池预热跳过: {type(e).__name__}: {e}")
 
 
 def create_app(config: dict | None = None) -> Any:
