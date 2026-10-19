@@ -1,20 +1,122 @@
-"""选股扫描提速三件套的测试
+"""选股扫描提速的测试
 
 实测基线(2026-10-19, 本机):
   3~5 只         0.5s
   30 只 冷缓存   64.2s     <- 用户抱怨的"有点长"
   30 只 热缓存    5.0s
 
-结论: 慢在**首次取数**(每只 ~2s), 不是计算; 串行是 baostock 单连接
-不安全导致的既成事实(并发会 RuntimeError, 已复现), 不能靠加线程解决。
-
 三个优化:
   1. 启动后台预热常用股票池 -> 首次扫描也接近热缓存速度
   2. 缓存 TTL 策略          -> 收盘后日线不再变, 不该 1 小时就失效
   3. 扫描进度反馈          -> 60 秒的转圈变成"已扫描 12/30"
+
+⚠️ 归因修正(同日 16:40 实测): 上面第 1、2 条只解决了"取数慢", 但**那不是主因**。
+真正的瓶颈是"每只股票新建 fetcher + 每只新建策略", 而这两处都会间接触发
+数据源构造(``BaostockSource.__init__`` 里就 login), 数据源不可用时每次要等
+21~94 秒超时:
+
+  修复前(接口实测): 扫 5 只 = 354s / 196s
+  修复后(接口实测): 扫 5 只 = **0.1s**
+
+缓存命中后取数只要 0.09s、指标 0.03s、信号 0.00s —— 99% 的时间花在等
+login 超时上。TestFetcherReuse / TestLazyFetcher 锁住这两处。
 """
 
 from __future__ import annotations
+
+# ==================== 归因修正: 真正的瓶颈(耗时占 99%) ====================
+
+
+class TestFetcherReuse:
+    """同一次扫描内必须复用同一个 fetcher"""
+
+    def test_same_source_returns_same_instance(self, monkeypatch):
+        import stock_model.web.screener as scr
+
+        made: list[str] = []
+
+        class FakeFetcher:
+            def __init__(self, source=None):
+                made.append(source or "")
+
+        scr._fetcher_cache.clear()
+        monkeypatch.setattr(scr, "StockDataFetcher", FakeFetcher)
+        a = scr._fetcher_for("sina")
+        b = scr._fetcher_for("sina")
+        scr._fetcher_cache.clear()
+
+        assert a is b, "同一 data_source 必须复用同一个 fetcher 实例"
+        assert made == ["sina"], f"不应重复构造(实际构造 {len(made)} 次)"
+
+    def test_different_sources_get_different_instances(self, monkeypatch):
+        """不同 data_source 各一个, 不能串味"""
+        import stock_model.web.screener as scr
+
+        class FakeFetcher:
+            def __init__(self, source=None):
+                self.source = source
+
+        scr._fetcher_cache.clear()
+        monkeypatch.setattr(scr, "StockDataFetcher", FakeFetcher)
+        a = scr._fetcher_for("sina")
+        b = scr._fetcher_for("akshare")
+        scr._fetcher_cache.clear()
+
+        assert a is not b, "不同数据源不能共用一个 fetcher"
+
+
+class TestLazyFetcher:
+    """FundamentalAnalysis 的 fetcher 必须惰性创建"""
+
+    def test_no_fetcher_constructed_on_init(self, monkeypatch):
+        """构造不该触发 StockDataFetcher()(它会 login 等超时)"""
+        import stock_model.analysis.fundamental as fa
+
+        made: list[str] = []
+
+        class Boom:
+            def __init__(self, *a, **k):
+                made.append("x")
+                raise AssertionError("构造时不应创建 fetcher")
+
+        monkeypatch.setattr(fa, "StockDataFetcher", Boom)
+        fa.FundamentalAnalysis()
+        assert made == [], "构造 FundamentalAnalysis 不应创建 fetcher"
+
+    def test_injected_fetcher_used_immediately(self):
+        """显式注入的 fetcher 立即可用"""
+        from stock_model.analysis.fundamental import FundamentalAnalysis
+
+        sentinel = object()
+        obj = FundamentalAnalysis(fetcher=sentinel)  # type: ignore[arg-type]
+        assert obj.fetcher is sentinel
+
+    def test_fetcher_created_on_first_use(self, monkeypatch):
+        """真正用到时才创建, 且只创建一次"""
+        import stock_model.analysis.fundamental as fa
+
+        made: list[str] = []
+
+        class Fake:
+            def __init__(self, *a, **k):
+                made.append("x")
+
+        monkeypatch.setattr(fa, "StockDataFetcher", Fake)
+        obj = fa.FundamentalAnalysis()
+        assert made == []
+        _ = obj.fetcher
+        _ = obj.fetcher
+        assert len(made) == 1, f"应只创建一次, 实际 {len(made)} 次"
+
+    def test_fetcher_settable(self):
+        """setter 可用(兼容既有代码直接赋值)"""
+        from stock_model.analysis.fundamental import FundamentalAnalysis
+
+        obj = FundamentalAnalysis()
+        sentinel = object()
+        obj.fetcher = sentinel  # type: ignore[assignment]
+        assert obj.fetcher is sentinel
+
 
 # ==================== 2. 缓存 TTL 策略 ====================
 

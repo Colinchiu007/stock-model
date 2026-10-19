@@ -53,7 +53,26 @@ class FundamentalAnalysis:
 
     def __init__(self, fetcher: StockDataFetcher | None = None):
         self.settings = get_settings().analysis
-        self.fetcher = fetcher or StockDataFetcher()
+        # 注入的 fetcher 立即用; 没注入的**惰性创建**。
+        #
+        # 为什么必须惰性(2026-10-19 实测): StockDataFetcher() 的构造会
+        # 实例化主数据源, 而 BaostockSource.__init__ 里就 login() —— 数据源
+        # 不可用时会等超时(实测 21~94 秒/次)。选股扫描每只股票都会
+        # ManualStrategy() -> FundamentalAnalysis(), 于是
+        # 5 只股票白等 250~480 秒, 而基本面数据在选股路径上根本没被用到。
+        # 真正用到 get_valuation/get_financial_summary 时才建, 那时等待才是必要的。
+        self._fetcher = fetcher
+
+    @property
+    def fetcher(self) -> StockDataFetcher:
+        """惰性获取 fetcher(首次使用时才构造, 避免无谓的网络等待)"""
+        if self._fetcher is None:
+            self._fetcher = StockDataFetcher()
+        return self._fetcher
+
+    @fetcher.setter
+    def fetcher(self, value: StockDataFetcher) -> None:
+        self._fetcher = value
 
     def get_valuation(self, symbol: str) -> pd.DataFrame:
         """

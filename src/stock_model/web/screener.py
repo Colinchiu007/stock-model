@@ -27,11 +27,17 @@ import threading
 import time
 import uuid
 
+from stock_model.data.fetcher import StockDataFetcher
+
 # 扫描进度: request_id -> {"done","total","updated_at"}。
 # 只为消除前端"黑屏 60 秒"的困惑, 不参与业务判断。
 _SCAN_PROGRESS_TTL = 300.0  # 秒; 过期记录在查询/结束时清理
 _scan_progress: dict[str, dict] = {}
 _progress_lock = threading.Lock()
+
+# 按 data_source 复用 fetcher(见 _fetcher_for 的说明)
+_fetcher_cache: dict[str, Any] = {}
+_fetcher_lock = threading.Lock()
 
 
 def _prune_progress() -> None:
@@ -42,6 +48,26 @@ def _prune_progress() -> None:
             rid for rid, v in _scan_progress.items() if now - v.get("_ts", 0) > _SCAN_PROGRESS_TTL
         ]:
             _scan_progress.pop(rid, None)
+
+
+def _fetcher_for(data_source: str):
+    """按数据源名复用 fetcher 实例(整批扫描共用一个)
+
+    为什么必须复用(2026-10-19 实测): ``StockDataFetcher(source=...)`` 的构造
+    会实例化主数据源, 而 ``BaostockSource.__init__`` 里就``login()`` ——
+    数据源不可用时每次构造要等超时(实测 21~94 秒/只)。原本每只股票新建一个,
+    扫 5 只 = 350 秒, 而缓存命中后取数只要 0.1 秒, **99% 的时间在等 login 超时**。
+
+    baostock 单连接**不允许并发查询**, 但扫描本身是串行的, 复用实例安全。
+
+    用 dict 按源名缓存: 不同 ``data_source`` 参数各自一个, 不会串味。
+    """
+    with _fetcher_lock:
+        f = _fetcher_cache.get(data_source)
+        if f is None:
+            f = StockDataFetcher(source=data_source)
+            _fetcher_cache[data_source] = f
+        return f
 
 
 def _scan_with_progress(
@@ -96,7 +122,6 @@ def _analyze_one(
     """
     from stock_model.analysis.signals import SignalGenerator
     from stock_model.analysis.technical import TechnicalAnalysis
-    from stock_model.data.fetcher import StockDataFetcher
 
     result: dict[str, Any] = {
         "symbol": symbol,
@@ -115,7 +140,7 @@ def _analyze_one(
     }
 
     try:
-        fetcher = StockDataFetcher(source=data_source)
+        fetcher = _fetcher_for(data_source)
         df = fetcher.get_daily(symbol, start_date=start_date)
         if df is None or df.empty:
             result["error"] = "无数据"
