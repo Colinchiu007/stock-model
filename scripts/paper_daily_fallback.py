@@ -199,6 +199,56 @@ def start_server() -> subprocess.Popen | None:
     )
 
 
+def verify_account_invariants() -> list[str]:
+    """跑完后的账户自洽校验(返回问题列表, 空=通过)
+
+    为什么放在这里
+    --------------
+    这类错误**不报错、但结果是错的**: 2026-10-19 的 ``cursor`` 差一
+    (cursor=64 而曲线 65 点) 会让 ``step()`` 重复处理最后一根 bar,
+    策略在同一根 bar 上再跑一次 —— 但 HTTP 依然 200、status 依然 ok,
+    `run_exit_code()` 完全看不出来。
+
+    兜底脚本是无人值守路径上的**最后一道**: 校验失败必须返回非 0,
+    再让死信开关 ping /fail 触发告警, 否则永远没有人知道。
+
+    不变量:
+      - cursor[symbol] == len(equity_curve)   (差一 -> 重复推进)
+      - 曲线日期严格递增且不重复
+      - trade_id 唯一(多实例写同一账户会撞号)
+    """
+    store_dir = Path(os.environ.get("STOCK_PAPER_DIR") or (REPO / "data" / "paper"))
+    path = store_dir / "default.json"
+    if not path.exists():
+        return []  # 还没有账户文件(全新环境), 不算失败
+    try:
+        data: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        return [f"账户文件读取失败: {type(e).__name__}: {e}"]
+
+    problems: list[str] = []
+    curve = data.get("equity_curve") or []
+    n = len(curve)
+
+    cursor = (data.get("_metadata") or {}).get("cursor") or {}
+    for symbol, idx in cursor.items():
+        if idx != n:
+            problems.append(
+                f"{symbol} cursor={idx} != 曲线点数={n} —— 差一会让下一步重复处理同一根 bar"
+            )
+
+    dates = [str(e.get("date")) for e in curve]
+    if dates != sorted(dates):
+        problems.append(f"资金曲线日期非递增: {dates[-3:] if len(dates) >= 3 else dates}")
+    if len(dates) != len(set(dates)):
+        problems.append(f"资金曲线日期有重复: {dates[-3:] if len(dates) >= 3 else dates}")
+
+    ids = [t.get("trade_id") for t in (data.get("trades") or [])]
+    if len(ids) != len(set(ids)):
+        problems.append(f"trade_id 重复: {ids}")
+    return problems
+
+
 def main() -> int:
     global PORT, BASE
     # .env 必须先加载: STOCK_PING_URL / FALLBACK_BASE_URL 都可能在里面配
@@ -277,6 +327,14 @@ def main() -> int:
     )
     # skipped(非交易日) 与 ok 都算"今天的账已处理"; error/未知才算失败
     code = run_exit_code(result)
+    # 跑完之后校验账户自洽: 这类错误 HTTP 200 + status=ok 完全看不出来,
+    # 只能靠读落盘数据验不变量(见 verify_account_invariants 的说明)。
+    problems = verify_account_invariants()
+    if problems:
+        for p in problems:
+            print(f"⚠️ 账户自洽校验失败: {p}")
+        if code == 0:
+            code = 1  # 让死信开关 ping /fail, 触发告警
     # 死信开关: 无论成败都 ping(失败 ping /fail 让监控立即告警)。
     # 这是"机器彻底关机时唯一能通知到人"的机制 —— 见 scripts/watchdog_ping.py。
     if ping_url:
