@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from loguru import logger
@@ -86,8 +87,139 @@ def _persist(account_id: str, engine: PaperEngine) -> tuple[bool, str]:
     return True, ""
 
 
+# 模拟盘取数的滚动窗口长度(bar 数)。
+#
+# 为什么用"最近 N 根"而不是绝对日期(2026-10-21 用户实测发现):
+#   原先 _default_start_date 写死 "20240101", 账户从 2024-01-02 开始每
+#   交易日爬一根。今天是 2026-10-21, cursor 才到 2024-04-17 —— **差 2.4 年**。
+#   按这速度攒 20 笔成交要一两年, 且评估的是 2024 年的市场, 对当下没参考价值。
+#
+# 300 根的由来: 指标最长回看是 MA250(settings.analysis.ma_periods 含 250),
+# 实测 250 根时末行 NaN 归零; 取 300 留 50 根余量, 让策略在窗口头部也有数据。
+DEFAULT_LOOKBACK_BARS = 300
+
+
+def migrate_to_rolling_window(account_file: Path) -> dict[str, Any]:
+    """把已有账户迁移到滚动窗口口径(方案 A, 用户选定 A1 重置)
+
+    为什么需要"重置"而不只是换 start_date:
+      旧窗口(2024-01 起)产生的成交/持仓, 与新窗口(最近 300 根)的历史
+      **不是同一口径** —— 保留它们会让"窗口第 0 根的起点持仓"与该窗口
+      之前发生了什么对不上。观察期要的是同一口径下的连续记录,
+      故按用户选定的 A1: 现金回初始、清持仓/成交/曲线, cursor 归 0。
+
+    保留(用户配置, 不是历史): symbols / data_source / initial_capital。
+
+    安全性:
+      - 迁移前**必须备份**(原样复制到 ``*.bak_migrate_<ts>``)
+      - 幂等: 已迁移过的账户再跑一次不报错、不二次破坏
+      - 文件不存在显式 FileNotFoundError(不静默"成功")
+
+    Returns:
+        {"backup": 备份路径, "start_date": 新起点, "cursor": 新游标, ...}
+    """
+    import json
+    import shutil
+    from datetime import datetime
+
+    path = Path(account_file)
+    if not path.exists():
+        raise FileNotFoundError(f"账户文件不存在: {path}")
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    meta = data.setdefault("_metadata", {})
+    symbols = [str(s) for s in (meta.get("symbols") or []) if str(s).strip()]
+    if not symbols:
+        raise ValueError(f"账户 {path} 无股票池记录, 无法定窗口")
+
+    # 1. 算窗口起点(与 _build_engine 同源, 保证两边一致)
+    start_date = _rolling_start_date(symbols, str(meta.get("data_source") or "baostock"))
+
+    # 2. 备份(原样, 迁移前)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup = path.with_name(f"{path.stem}.bak_migrate_{ts}{path.suffix}")
+    shutil.copy2(path, backup)
+
+    # 3. 重置到窗口起点
+    initial_capital = float(meta.get("initial_capital") or data.get("initial_capital") or 10000.0)
+    meta["start_date"] = start_date
+    meta["cursor"] = dict.fromkeys(symbols, 0)
+    data["cash"] = initial_capital
+    data["initial_capital"] = initial_capital
+    data["positions"] = {}
+    data["trades"] = []
+    data["equity_curve"] = []
+
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8", newline="")
+
+    logger.info(
+        f"[paper-migrate] 账户 {path} 已迁移到滚动窗口: "
+        f"start_date={start_date} cursor=0 成交/持仓/曲线已重置 (备份 {backup.name})"
+    )
+    return {
+        "backup": str(backup),
+        "start_date": start_date,
+        "cursor": 0,
+        "symbols": symbols,
+        "initial_capital": initial_capital,
+    }
+
+
+def _window_start_date(
+    bars: Any, lookback: int = DEFAULT_LOOKBACK_BARS, default: str = "20200101"
+) -> str:
+    """由索引推出"最近 N 根"的起点日期(YYYYMMDD)
+
+    Args:
+        bars: DatetimeIndex 或日期序列(数据源返回的索引)
+        lookback: 要覆盖多少根 bar
+        default: 拿不到索引时的回退起点
+
+    Returns:
+        YYYYMMDD 字符串。**一定是 bars 里真实存在的交易日** ——
+        否则取数区间与落盘不一致会导致 cursor(行下标)与日期错位。
+    """
+    if bars is None or len(bars) == 0:
+        return default
+    try:
+        n = len(bars)
+        if n <= lookback:
+            return str(bars[0].date()).replace("-", "")
+        return str(bars[n - lookback].date()).replace("-", "")
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return default
+
+
+def _rolling_start_date(
+    symbols: list[str], data_source: str, lookback: int = DEFAULT_LOOKBACK_BARS
+) -> str:
+    """取"最近 N 根"对应的起点日期(YYYYMMDD)
+
+    实现要点: 必须**先取一次数**才知道索引长度与真实交易日 ——
+    不能按自然日倒推(那样算出的日期可能不是交易日, 取回来首根就偏移)。
+
+    取数失败(网络抖动/源不可用)时回退到 ``_default_start_date``:
+    起点只是取数区间, 引擎照常能跑; 而"因为算不出起点就开不了账户"
+    是把优化变成了硬依赖, 不可接受。
+    """
+    from stock_model.data.fetcher import StockDataFetcher
+
+    try:
+        fetcher = StockDataFetcher(source=data_source)
+        for sym in symbols:
+            bars = fetcher.get_daily(sym, start_date=None)
+            if bars is not None and not bars.empty:
+                return _window_start_date(bars.index, lookback)
+    except Exception as e:
+        logger.warning(
+            f"滚动窗口起点计算失败({type(e).__name__}: {e}), "
+            f"回退默认起点 {_default_start_date(symbols)}"
+        )
+    return _default_start_date(symbols)
+
+
 def _default_start_date(symbols: list[str]) -> str:
-    """默认取数起点: 动态池(多只)用长窗口, 回退池(3 只)用短窗口"""
+    """默认取数起点(已废弃: 改为滚动窗口, 保留仅为兼容既有调用方)"""
     return "20190101" if len(symbols) > 3 else "20240101"
 
 
@@ -110,12 +242,22 @@ def _build_engine(
             logger.warning(f"账户 {account_id} 有状态但无股票池记录, 回退默认池")
         symbols = list(FALLBACK_SYMBOLS)
 
+    data_source = str(metadata.get("data_source") or "baostock")
+    # 取数起点:
+    #   - 落盘显式配了 start_date  -> 按它(可回退旧行为, 也便于对齐历史账户)
+    #   - 否则 -> **滚动窗口**(最近 DEFAULT_LOOKBACK_BARS 根)
+    # 写死绝对日期会让账户永远爬历史: 2026-10-21 实测 cursor 才到 2024-04-17,
+    # 比"今天"慢 2.4 年, 观察期失去意义(见 DEFAULT_LOOKBACK_BARS 注释)。
+    start_date = metadata.get("start_date")
+    if not start_date:
+        start_date = _rolling_start_date(symbols, data_source)
+
     engine = PaperEngine(
         symbols=symbols,
         initial_capital=float(metadata.get("initial_capital") or 10000.0),
-        data_source=str(metadata.get("data_source") or "baostock"),
+        data_source=data_source,
         # 恢复时取数区间必须与落盘时一致, 否则游标(行下标)与日期错位
-        start_date=str(metadata.get("start_date") or _default_start_date(symbols)),
+        start_date=str(start_date),
         end_date=metadata.get("end_date"),
         account_id=account_id,
         account=account,

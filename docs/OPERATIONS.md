@@ -257,6 +257,30 @@ STOCK_API_TOKEN=change-me-to-a-long-random-string
 （`sina` 是 2026-10-19 加的第三个源：当天 baostock 拉黑 IP、
 akshare 被 RemoteDisconnected，两个既有源**同时**挂掉。）
 
+### 5b.0 滚动窗口（2026-10-21 起，方案 A）
+
+模拟盘取数起点**不再是写死的绝对日期**，而是"最近 `DEFAULT_LOOKBACK_BARS`(300) 根"。
+
+背景：原先 `start_date=20240101` 写死，账户每交易日爬一根 bar。2026-10-21 实测
+cursor 才到 2024-04-17 —— 比"今天"慢 **2.4 年**，观察期攒 20 笔要等一两年，
+且评估的是 2024 年的市场，对当下没参考价值。
+
+300 根由来：指标最长回看 MA250，实测 250 根末行 NaN 归零，300 留余量。
+起点算不出（取数失败）时回退默认起点，**不会**因此打不开账户。
+
+**迁移已有账户**（`scripts/migrate_rolling_window.py`）：
+
+```bash
+python scripts/migrate_rolling_window.py
+```
+
+约定的口径（用户选定 **A1：重置**）：现金回初始、清成交/持仓/曲线、cursor 归 0，
+从窗口第 0 根开跑；保留 `symbols`/`data_source`/`initial_capital`（用户配置）。
+迁移前自动备份到 `*.bak_migrate_<ts>`（gitignore），可回滚；函数幂等。
+
+> 为什么不保留旧成交：旧窗口产生的持仓与新窗口历史**不是同一口径**，
+> 保留会让"窗口第 0 根的起点持仓"对不上之前发生了什么。
+
 ### 5b.1 判断哪个源可用
 
 ```bash
