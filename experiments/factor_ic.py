@@ -1,25 +1,36 @@
-"""因子 IC/IR 分析(研究方案 §5: 最小验证, 用数据决定做哪些因子)
+"""因子 IC / IR 显著性分析(研究方案 Phase A)
 
-为什么先做这个
---------------
-研究方案列了 12 个候选因子, 但**照文章抄是危险的**(本项目 TrendFilter
-就是"看起来对、实测负收益")。所以先用零依赖、零风险的方式验证:
-  这些因子在真实数据上到底有没有预测力?
+为什么先做这个而不是直接做 UI
+-----------------------------
+第一版只用了 3 只标的: 截面 Spearman 相关在 n=3 时波动极大,
+**统计意义有限**。照那个结论选因子 = 拿噪声当信号。
+本轮扩到 20+ 只, 并补上统计检验, 让结论站得住, 再花工程量做 UI。
 
-指标
-----
-  IC (Information Coefficient):  因子值与未来收益的**横截面相关系数**
-      每个调仓日算一次 Spearman 相关, 再取时间序列
-      |IC| 均值 > 0.02 通常认为有弱预测力; > 0.05 算不错
-  IR (Information Ratio):        IC 均值 / IC 标准差, 衡量**稳定性**
-      IR > 0.3 通常认为可用
+方法论要点
+----------
+1. **样本量门槛**: 有效标的 < min_symbols 时拒绝出结论, 不静默降级
+2. **显著性**: 报告 t 统计量与 p 值 —— n 大时很小的 IC 也可能显著,
+   只看 IC 均值会误判
+3. **多重检验校正**(Bonferroni): 同时检验 13 个因子, 不校正的话
+   "最显著的那个"很可能只是运气
+4. **反向验证**: 随机游走数据上不该出现显著因子 —— 若出现,
+   说明方法有未来函数或过拟合(有测试锁住)
 
-用法: python experiments/factor_ic.py
+判读:
+    |IC| >= 0.05 且 p_corrected < 0.05  → 有预测力
+    |IC| 0.02~0.05 且显著              → 弱, 可作辅助
+    否则                                → 不要为它花工程量
+
+用法:
+    python experiments/factor_ic.py
+    python experiments/factor_ic.py --symbols 000002,000001,600036 --min-symbols 5
 """
 
 from __future__ import annotations
 
+import argparse
 import sys
+from math import erfc, sqrt
 from pathlib import Path
 
 import numpy as np
@@ -35,35 +46,61 @@ logger.add(sys.stderr, level="WARNING")
 from stock_model.analysis.factors import default_registry
 from stock_model.data.fetcher import StockDataFetcher
 
-# 与模拟盘同源: 同样的标的池(便于后续直接用于 Phase A 筛选)
-SYMBOLS = ["000002", "000001", "600036"]
-START = "20240101"
-FORWARD_DAYS = 5  # 预测未来 5 日收益
-MIN_CROSS_SECTION = 3  # 截面至少几只才相关系数有意义
+DEFAULT_SYMBOLS = [
+    "000002", "000001", "600036", "000651", "600519",
+    "600000", "600016", "600030", "000858", "000333",
+    "601318", "601899", "002415", "002594", "300750",
+    "600276", "000725", "601012", "600887", "603288",
+    "000568", "601166", "600309", "002304",
+]
+FORWARD_DAYS = 5
+MIN_CROSS_SECTION = 3
 
 
-def build_panel(symbols: list[str]) -> dict[str, pd.DataFrame]:
-    """取数并算因子 + 未来收益"""
+def add_forward_return(
+    df: pd.DataFrame, close: pd.Series, days: int
+) -> pd.DataFrame:
+    """加上未来 N 日收益列
+
+    Args:
+        df: 因子 DataFrame(不含 close, 索引与 close 对齐)
+        close: 原始收盘价序列
+        days: 前瞻天数
+
+    严格用 ``shift(-days)``(未来函数检测: 用 shift(+days) 会变成
+    "用过去预测过去", 有测试锁住)。
+    """
+    out = df.copy()
+    out["fwd_ret"] = close.shift(-days) / close - 1.0
+    return out
+
+
+def build_panel(symbols: list[str], start: str) -> dict[str, pd.DataFrame]:
+    """取数 + 算因子 + 未来收益, 返回 {symbol: DataFrame}"""
     f = StockDataFetcher(source="baostock")
     reg = default_registry()
-    panel = {}
+    names = reg.list()
+    panel: dict[str, pd.DataFrame] = {}
     for sym in symbols:
-        df = f.get_daily(sym, start_date=START)
+        try:
+            df = f.get_daily(sym, start_date=start)
+        except Exception as e:
+            print(f"  {sym}: 取数失败({type(e).__name__}), 跳过")
+            continue
         if df is None or df.empty:
             print(f"  {sym}: 无数据, 跳过")
             continue
-        fac = reg.compute(df, reg.list())
-        fac["fwd_ret"] = df["close"].shift(-FORWARD_DAYS) / df["close"] - 1.0
+        fac = reg.compute(df, names)
+        # 注意: fac 不含 close(只有因子列), 未来收益要基于**原始行情**
+        fac = add_forward_return(fac, df["close"], FORWARD_DAYS)
         panel[sym] = fac
-        print(f"  {sym}: {len(df)} 根 bar, {len(reg.list())} 个因子")
     return panel
 
 
 def ic_series(panel: dict[str, pd.DataFrame], factor: str) -> pd.Series:
     """逐日横截面 IC(Spearman 相关)"""
-    rows = {}
-    # 以第一只的索引为准(同源同窗口, 索引一致)
     base_idx = next(iter(panel.values())).index
+    rows: dict = {}
     for date in base_idx:
         xs, ys = [], []
         for df in panel.values():
@@ -79,53 +116,159 @@ def ic_series(panel: dict[str, pd.DataFrame], factor: str) -> pd.Series:
     return pd.Series(rows).dropna()
 
 
-def main() -> int:
-    print("=== 因子 IC/IR 分析 ===")
-    print(f"标的: {SYMBOLS} | 起始 {START} | 预测未来 {FORWARD_DAYS} 日收益\n")
+def _effective_sample_size(ic: pd.Series, max_lag: int | None = None) -> float:
+    """Newey-West 折减后的有效样本量
 
-    panel = build_panel(SYMBOLS)
-    if len(panel) < MIN_CROSS_SECTION:
-        print("有效标的不足, 无法做截面分析")
-        return 1
+    IC 序列存在正自相关时, 独立观测数少于名义天数。用 Bartlett 核
+    估计自相关并折减:
+
+        n_eff = n / (1 + 2 * Σ_{l=1}^{L} (1 - l/(L+1)) * ρ_l)
+
+    ρ_l <= 0 的项不累加(负自相关不会放大 t), 保守起见只累加正的自相关。
+    结果夹在 [2, n] 之间。
+    """
+    n = len(ic)
+    if n < 10:
+        return max(2.0, float(n))
+    if max_lag is None:
+        # 常用经验: 预测期 5 日时, 取 4*sqrt(n) 或 5 日重叠 -> 用 2*FORWARD_DAYS
+        max_lag = min(int(4 * np.sqrt(n)), max(2 * FORWARD_DAYS, 5))
+    x = ic.to_numpy(dtype=float)
+    x = x - x.mean()
+    denom = float(np.dot(x, x))
+    if denom <= 0:
+        return max(2.0, float(n))
+
+    acc = 0.0
+    for lag in range(1, max_lag + 1):
+        rho = float(np.dot(x[:-lag], x[lag:])) / denom
+        if rho > 0:
+            acc += (1.0 - lag / (max_lag + 1.0)) * rho
+
+    n_eff = n / (1.0 + 2.0 * acc)
+    return float(min(max(n_eff, 2.0), float(n)))
+
+
+def analyze(panel: dict[str, pd.DataFrame], min_symbols: int = 10) -> list[dict]:
+    """算每个因子的 IC / IR / t / p / 校正后 p
+
+    Raises:
+        ValueError: 有效标的数量不足 min_symbols(拒绝出结论)
+    """
+    if len(panel) < min_symbols:
+        raise ValueError(
+            f"样本不足: 有效标的 {len(panel)} < 门槛 {min_symbols}。"
+            f"截面相关系数在小样本下波动极大, 不据此出结论。"
+        )
 
     reg = default_registry()
-    results = []
+    rows: list[dict] = []
     for factor in reg.list():
         ic = ic_series(panel, factor)
-        if len(ic) < 30:
-            results.append((factor, float("nan"), float("nan"), len(ic)))
+        n = len(ic)
+        if n < 30:
+            rows.append({
+                "factor": factor, "ic_mean": float("nan"), "ir": float("nan"),
+                "t_stat": float("nan"), "p_value": float("nan"),
+                "p_corrected": float("nan"), "n_days": n,
+            })
             continue
         ic_mean = float(ic.mean())
-        ic_std = float(ic.std())
-        ir = ic_mean / ic_std if ic_std and not np.isnan(ic_std) and ic_std > 0 else float("nan")
-        # IC > 0 的占比: 方向一致性
-        pos_rate = float((ic > 0).mean())
-        results.append((factor, ic_mean, ir, len(ic)))
-        _ = pos_rate
+        ic_std = float(ic.std(ddof=1))
+        if ic_std > 0 and not np.isnan(ic_std):
+            ir = ic_mean / ic_std
+            # ⚠️ 不能直接用 sqrt(n) 算 t: 连续交易日的截面 IC **高度自相关**
+            # (同一批标的在同一段行情里), 独立样本量远小于 n, 直接用会
+            # 系统性高估显著性 -> 假阳性。实测: 随机游走数据上 mom_10 /
+            # bb_position 被误判为"显著"(校正后 p=0.031/0.012)。
+            # 故用 Newey-West 调整: 按自相关折减有效样本量。
+            eff_n = _effective_sample_size(ic)
+            t_stat = ic_mean / (ic_std / np.sqrt(max(eff_n, 2.0)))
+            p_value = erfc(abs(t_stat) / sqrt(2))
+        else:
+            ir = float("nan")
+            t_stat = float("nan")
+            p_value = float("nan")
+        rows.append({
+            "factor": factor, "ic_mean": ic_mean, "ir": ir,
+            "t_stat": t_stat, "p_value": p_value,
+            "p_corrected": float("nan"),  # 下面统一校正
+            "n_days": n,
+        })
 
-    print("\n=== 结果(按 |IC| 降序) ===")
-    print(f"{'因子':<16}{'IC均值':>10}{'IR':>10}{'样本天数':>10}   判读")
-    print("-" * 62)
-    rows = sorted(results, key=lambda r: abs(r[1]) if not np.isnan(r[1]) else -1, reverse=True)
-    for name, icm, ir, n in rows:
+    # Bonferroni 多重检验校正: 同时检验 k 个因子, 阈值收紧 k 倍
+    k = len([r for r in rows if not np.isnan(r["p_value"])])
+    for r in rows:
+        if np.isnan(r["p_value"]):
+            continue
+        r["p_corrected"] = min(1.0, r["p_value"] * k)
+
+    return rows
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description="因子 IC 显著性分析")
+    ap.add_argument("--symbols", default="", help="逗号分隔(默认内置 24 只)")
+    ap.add_argument("--start", default="20240101")
+    ap.add_argument("--min-symbols", type=int, default=10, help="样本量门槛")
+    args = ap.parse_args()
+
+    symbols = (
+        [s.strip() for s in args.symbols.split(",") if s.strip()]
+        or DEFAULT_SYMBOLS
+    )
+
+    print("=== 因子 IC 显著性分析 ===")
+    print(f"标的 {len(symbols)} 只 | 起始 {args.start} | 预测未来 {FORWARD_DAYS} 日")
+    print(f"样本量门槛: {args.min_symbols}\n")
+
+    panel = build_panel(symbols, args.start)
+    print(f"有效标的: {len(panel)}/{len(symbols)}")
+    print(f"因子数  : {len(default_registry().list())}\n")
+
+    try:
+        rows = analyze(panel, min_symbols=args.min_symbols)
+    except ValueError as e:
+        print(f"拒绝出结论: {e}")
+        return 1
+
+    def fmt(v: float, width: int, prec: int = 4) -> str:
+        if isinstance(v, float) and np.isnan(v):
+            return "n/a".rjust(width)
+        return f"{v:+.{prec}f}".rjust(width)
+
+    print("=== 结果(按 |IC| 降序) ===")
+    header = (
+        f"{'因子':<16}{'IC均值':>9}{'IR':>8}{'t':>8}{'p':>9}{'p校正':>9}{'天数':>7}  判读"
+    )
+    print(header)
+    print("-" * len(header))
+    ordered = sorted(
+        rows,
+        key=lambda x: abs(x["ic_mean"]) if not np.isnan(x["ic_mean"]) else -1,
+        reverse=True,
+    )
+    for r in ordered:
+        icm, p_c = r["ic_mean"], r["p_corrected"]
         if np.isnan(icm):
             verdict = "样本不足"
-        elif abs(icm) >= 0.05:
-            verdict = "★ 有预测力"
-        elif abs(icm) >= 0.02:
-            verdict = "○ 弱预测力"
+        elif p_c < 0.05 and abs(icm) >= 0.05:
+            verdict = "★ 显著且有预测力"
+        elif p_c < 0.05:
+            verdict = "○ 显著但弱"
         else:
-            verdict = "× 基本无效"
-        ic_s = f"{icm:+.4f}" if not np.isnan(icm) else "n/a"
-        ir_s = f"{ir:+.3f}" if not np.isnan(ir) else "n/a"
-        print(f"{name:<16}{ic_s:>10}{ir_s:>10}{n:>10}   {verdict}")
+            verdict = "× 不显著"
+        print(
+            f"{r['factor']:<16}{fmt(icm, 9)}{fmt(r['ir'], 8, 3)}"
+            f"{fmt(r['t_stat'], 8, 2)}{fmt(r['p_value'], 9, 3)}"
+            f"{fmt(p_c, 9, 3)}{r['n_days']:>7}  {verdict}"
+        )
 
     print("\n=== 判读说明 ===")
-    print("  |IC| >= 0.05  → 有预测力, 建议进 Phase A 第一批")
-    print("  |IC| 0.02~0.05 → 弱, 可作为辅助因子")
-    print("  |IC| <  0.02  → 基本无效, 不要为它花工程量")
-    print("\n  ⚠️ 本次仅 3 只标的, 截面相关系数统计意义有限;")
-    print("     结论用于**排序筛选**, 不用于直接启用策略。")
+    print("  p校正 < 0.05 且 |IC| >= 0.05 → 有预测力, 建议进第一批")
+    print("  p校正 < 0.05 但 |IC| 小       → 显著但弱, 可作辅助")
+    print("  p校正 >= 0.05                 → 不显著, 别为它花工程量")
+    print(f"\n  已做 Bonferroni 校正({len(rows)} 个因子同时检验), 避免把运气当信号。")
     return 0
 
 
