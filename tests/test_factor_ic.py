@@ -52,7 +52,9 @@ def _mk(n: int = 300, seed: int = 0) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     idx = pd.bdate_range("2024-01-01", periods=n)
     ret = rng.normal(0.0003, 0.015, n)
-    close = pd.Series(10.0 * (1 + ret).cumprod(), index=idx)
+    # 显式传 axis: 新版 numpy 的 cumprod 要求至少 axis 参数,
+    # CI 的 numpy 版本比本地严(本地宽松通过、CI 报 call-overload)
+    close = pd.Series(10.0 * np.cumprod(1.0 + ret, axis=0), index=idx)
     return pd.DataFrame(
         {
             "open": close * 0.99,
