@@ -20,7 +20,6 @@
 from __future__ import annotations
 
 import importlib.util
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -138,7 +137,7 @@ class TestICStatistics:
             panel[f"S{i}"] = fac
 
         rows = ic.analyze(panel, min_symbols=10)
-        strong = [r for r in rows if r["factor"] == "mom_20"][0]
+        strong = next(r for r in rows if r["factor"] == "mom_20")
         assert not np.isnan(strong["p_value"]), "强信号下 p 不应为 NaN"
         assert 0.0 < strong["p_value"] < 0.05, (
             f"强信号下原始 p 应在 (0, 0.05), 实际 {strong['p_value']}"
