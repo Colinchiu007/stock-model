@@ -149,6 +149,106 @@ def _effective_sample_size(ic: pd.Series, max_lag: int | None = None) -> float:
     return float(min(max(n_eff, 2.0), float(n)))
 
 
+def split_segments(
+    index: pd.Index, n_segments: int = 3
+) -> list[tuple[pd.Timestamp, pd.Timestamp]]:
+    """把样本区间切成 n 段, 边界落在**真实交易日**上
+
+    Returns:
+        [(start, end), ...]; 数据不足以分段时返回空列表(不硬凑)
+    """
+    n = len(index)
+    if n_segments < 1 or n < n_segments * 10:
+        # 每段至少 10 根, 否则段内 IC 无意义
+        return []
+    bounds: list[tuple[pd.Timestamp, pd.Timestamp]] = []
+    for k in range(n_segments):
+        lo = int(n * k / n_segments)
+        hi = int(n * (k + 1) / n_segments) - 1
+        if hi <= lo:
+            continue
+        bounds.append((index[lo], index[hi]))
+    return bounds
+
+
+def analyze_by_segment(
+    panel: dict[str, pd.DataFrame],
+    n_segments: int = 3,
+    min_days: int = 60,
+    min_symbols: int = 10,
+    alpha: float = 0.05,
+) -> list[dict]:
+    """分段稳健性分析
+
+    对每个因子: 切成 n_segments 段, 每段独立算 IC / t / p(带 Newey-West),
+    再做 Bonferroni 校正; 然后判稳健性:
+      - ``consistent_direction``: 各有效段的 IC 符号是否一致
+        (牛段为正、熊段为负 = 不稳定, 不能用于建仓)
+      - ``robust``: 方向一致 **且** 显著段数达标
+
+    为什么要分段(研究方案 §5.4):
+      单一时间窗口显著的因子, 可能只是那段行情的巧合。若换个环境就失效,
+      基于它建策略 = 过拟合于一段历史。本项目 TrendFilter 已吃过这个亏
+      (上涨市实测恶化 -2.36pp)。
+    """
+    if len(panel) < min_symbols:
+        raise ValueError(f"样本不足: 有效标的 {len(panel)} < 门槛 {min_symbols}")
+
+    base_idx = next(iter(panel.values())).index
+    segs = split_segments(base_idx, n_segments)
+    if not segs:
+        raise ValueError(f"数据不足以分 {n_segments} 段(需每段至少 10 根)")
+
+    reg = default_registry()
+    n_tests = max(1, len(reg.list()) * len(segs))
+    rows: list[dict] = []
+    for factor in reg.list():
+        seg_ics: list[float] = []
+        sig_count = 0
+        insufficient = 0
+        for start, end in segs:
+            sub = {k: v.loc[start:end] for k, v in panel.items()}
+            sub = {k: v for k, v in sub.items() if len(v) > 0}
+            ic = ic_series(sub, factor)
+            if len(ic) < min_days:
+                insufficient += 1
+                continue
+            ic_mean = float(ic.mean())
+            ic_std = float(ic.std(ddof=1))
+            seg_ics.append(ic_mean)
+            if ic_std > 0 and not np.isnan(ic_std):
+                eff_n = _effective_sample_size(ic)
+                t = ic_mean / (ic_std / np.sqrt(max(eff_n, 2.0)))
+                p = erfc(abs(t) / sqrt(2)) * n_tests  # Bonferroni
+                if p < alpha:
+                    sig_count += 1
+
+        valid = [x for x in seg_ics if not np.isnan(x)]
+        if len(valid) >= 2:
+            same_sign = all(x > 0 for x in valid) or all(x < 0 for x in valid)
+        elif len(valid) == 1:
+            same_sign = True
+        else:
+            same_sign = False
+
+        need_sig = 2 if len(segs) >= 2 else 1
+        robust = bool(same_sign and sig_count >= need_sig and len(valid) >= 1)
+
+        rows.append({
+            "factor": factor,
+            "n_segments": len(segs),
+            "n_significant": sig_count,
+            "n_insufficient": insufficient,
+            "ic_by_segment": seg_ics,
+            "ic_mean_all": float(np.mean(valid)) if valid else float("nan"),
+            "consistent_direction": same_sign,
+            "robust": robust,
+            "n_days": len(valid),
+            "status": "insufficient" if insufficient >= len(segs) / 2 else "ok",
+        })
+    return rows
+
+
 def analyze(panel: dict[str, pd.DataFrame], min_symbols: int = 10) -> list[dict]:
     """算每个因子的 IC / IR / t / p / 校正后 p
 
@@ -211,6 +311,12 @@ def main() -> int:
     ap.add_argument("--symbols", default="", help="逗号分隔(默认内置 24 只)")
     ap.add_argument("--start", default="20240101")
     ap.add_argument("--min-symbols", type=int, default=10, help="样本量门槛")
+    ap.add_argument(
+        "--segments",
+        type=int,
+        default=0,
+        help="分段稳健性分析: 切成 N 段各自检验(0=不做, 默认 0)",
+    )
     args = ap.parse_args()
 
     symbols = (
@@ -232,10 +338,37 @@ def main() -> int:
         print(f"拒绝出结论: {e}")
         return 1
 
-    def fmt(v: float, width: int, prec: int = 4) -> str:
+    def fmt(v, width: int, prec: int = 4) -> str:
         if isinstance(v, float) and np.isnan(v):
             return "n/a".rjust(width)
         return f"{v:+.{prec}f}".rjust(width)
+
+    if args.segments > 0:
+        print(f"=== 分段稳健性({args.segments} 段) ===\n")
+        try:
+            seg_rows = analyze_by_segment(
+                panel, n_segments=args.segments, min_symbols=args.min_symbols
+            )
+        except ValueError as e:
+            print(f"拒绝出结论: {e}")
+            return 1
+        head = f"{'因子':<16}{'各段IC':<34}{'显著段':>7}{'方向一致':>9}{'稳健':>7}"
+        print(head)
+        print("-" * len(head))
+        for r in sorted(
+            seg_rows,
+            key=lambda x: (x["robust"], abs(x["ic_mean_all"])
+                           if not np.isnan(x["ic_mean_all"]) else 0),
+            reverse=True,
+        ):
+            segs_s = " ".join(f"{x:+.3f}" for x in r["ic_by_segment"]) or "n/a"
+            print(
+                f"{r['factor']:<16}{segs_s:<34}{r['n_significant']:>7}"
+                f"{'是' if r['consistent_direction'] else '否':>9}"
+                f"{'★' if r['robust'] else '×':>7}"
+            )
+        print("\n  稳健判据: 方向一致 **且** 显著段数 >= 2")
+        print("  单一窗口显著但分段不稳 = 过拟合于那段行情, 不可据此建仓。\n")
 
     print("=== 结果(按 |IC| 降序) ===")
     header = (
