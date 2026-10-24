@@ -87,20 +87,10 @@ class TestScanGrid:
         曾出过的 bug: scan 只按 start 切片, fwd_ret 用的是 build_panel 里
         固定的 5 日前瞻 -> 4 个 horizon 的 IC 完全相同, 扫描维度形同虚设。
         """
-        # 用确定性数据: 单调上涨序列
+        # 用确定性数据: 单调上涨序列(只需 close)
         n = 300
         idx = pd.bdate_range("2024-01-01", periods=n)
         close = pd.Series([10.0 + i * 0.1 for i in range(n)], index=idx)
-        df = pd.DataFrame(
-            {
-                "open": close,
-                "high": close * 1.01,
-                "low": close * 0.99,
-                "close": close,
-                "volume": [1e6] * n,
-            },
-            index=idx,
-        )
         r1 = ic.add_forward_return(pd.DataFrame(index=idx), close, 1)
         r20 = ic.add_forward_return(pd.DataFrame(index=idx), close, 20)
         # 上涨序列: 前瞻越远收益越大
