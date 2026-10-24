@@ -75,12 +75,19 @@ def add_forward_return(
     return out
 
 
-def build_panel(symbols: list[str], start: str) -> dict[str, pd.DataFrame]:
-    """取数 + 算因子 + 未来收益, 返回 {symbol: DataFrame}"""
+def build_panel(symbols: list[str], start: str):
+    """取数 + 算因子 + 未来收益
+
+    Returns:
+        (panel, closes): panel 是 {symbol: 因子DataFrame(含 fwd_ret)},
+        closes 是 {symbol: close 序列} —— 扫描时要按各自的 horizon 重算
+        fwd_ret, 故必须把 close 单独带出来(因子面板里没有 close 列)。
+    """
     f = StockDataFetcher(source="baostock")
     reg = default_registry()
     names = reg.list()
     panel: dict[str, pd.DataFrame] = {}
+    closes: dict[str, pd.Series] = {}
     for sym in symbols:
         try:
             df = f.get_daily(sym, start_date=start)
@@ -94,7 +101,8 @@ def build_panel(symbols: list[str], start: str) -> dict[str, pd.DataFrame]:
         # 注意: fac 不含 close(只有因子列), 未来收益要基于**原始行情**
         fac = add_forward_return(fac, df["close"], FORWARD_DAYS)
         panel[sym] = fac
-    return panel
+        closes[sym] = df["close"]
+    return panel, closes
 
 
 def ic_series(panel: dict[str, pd.DataFrame], factor: str) -> pd.Series:
@@ -306,6 +314,106 @@ def analyze(panel: dict[str, pd.DataFrame], min_symbols: int = 10) -> list[dict]
     return rows
 
 
+def build_grid(horizons: tuple[int, ...], starts: tuple[str, ...]) -> list[dict]:
+    """构造参数扫描网格: 预测期 × 时间起点"""
+    if not horizons or not starts:
+        return []
+    return [{"horizon": h, "start": s} for s in starts for h in horizons]
+
+
+def scan_and_summarize(
+    panel: dict[str, pd.DataFrame],
+    horizons: tuple[int, ...] = (1, 5, 10, 20),
+    starts: tuple[str, ...] = ("20240101", "20250101"),
+    min_combos: int = 4,
+    min_days: int = 60,
+    min_symbols: int = 10,
+    alpha: float = 0.05,
+    robust_ratio: float = 0.5,
+    recompute_fwd: bool = True,
+    closes: dict[str, pd.Series] | None = None,
+) -> list[dict]:
+    """多预测期 / 多起点扫描, 汇总每个因子的稳健性
+
+    为什么(研究方案 §5.6):
+      上轮「无一稳健」结论受限于单一预测期(5 日)与单一起点。
+      若某因子只在特定预测期有效, 只测一个就会**假阴性** ——
+      假阴性与假阳性同样危险, 都会导向错误的工程决策。
+
+    Args:
+        panel: 因子面板
+        recompute_fwd: 是否按每个 horizon **重算**前瞻收益。
+            默认 True —— 曾有 bug: 用面板里固定的 5 日前瞻去扫 1/5/10/20 日,
+            导致各 horizon 的 IC 完全相同, 扫描维度形同虚设。
+        closes: 各标的的 close 序列; recompute_fwd=True 时必需
+            (面板本身不含 close, 见 build_panel 的设计)
+    """
+    combos = build_grid(horizons, starts)
+    if len(combos) < min_combos:
+        raise ValueError(
+            f"组合数不足: {len(combos)} < 门槛 {min_combos}。参数空间太小, 结论不可靠。"
+        )
+    if len(panel) < min_symbols:
+        raise ValueError(f"样本不足: 有效标的 {len(panel)} < 门槛 {min_symbols}")
+    if recompute_fwd and not closes:
+        raise ValueError("recompute_fwd=True 需要 closes(各标的 close 序列)")
+
+    reg = default_registry()
+    n_tests = max(1, len(reg.list()) * len(combos))
+    rows: list[dict] = []
+    for factor in reg.list():
+        n_sig = 0
+        ics: list[float] = []
+        for combo in combos:
+            start = pd.Timestamp(combo["start"])
+            h = int(combo["horizon"])
+            sub: dict[str, pd.DataFrame] = {}
+            for k, v in panel.items():
+                w = v.loc[v.index >= start]
+                if len(w) < min_days:
+                    continue
+                if recompute_fwd and closes and k in closes:
+                    c = closes[k]
+                    w = w.copy()
+                    # 按**本组合的 horizon** 重算前瞻收益(关键修复)
+                    w["fwd_ret"] = c.shift(-h) / c - 1.0
+                sub[k] = w
+            if len(sub) < min_symbols:
+                continue
+            ic = ic_series(sub, factor)
+            if len(ic) < min_days:
+                continue
+            ic_mean = float(ic.mean())
+            ic_std = float(ic.std(ddof=1))
+            ics.append(ic_mean)
+            if ic_std > 0 and not np.isnan(ic_std):
+                eff_n = _effective_sample_size(ic)
+                t = ic_mean / (ic_std / np.sqrt(max(eff_n, 2.0)))
+                p = erfc(abs(t) / sqrt(2)) * n_tests  # Bonferroni
+                if p < alpha:
+                    n_sig += 1
+
+        valid = [x for x in ics if not np.isnan(x)]
+        if len(valid) >= 2:
+            same = all(x > 0 for x in valid) or all(x < 0 for x in valid)
+        elif len(valid) == 1:
+            same = True
+        else:
+            same = False
+
+        rows.append({
+            "factor": factor,
+            "n_combos": len(combos),
+            "n_significant": n_sig,
+            "n_consistent": len(valid) if same else 0,
+            "ic_by_combo": ics,
+            "ic_mean_all": float(np.mean(valid)) if valid else float("nan"),
+            "consistent_direction": same,
+            "robust": bool(same and n_sig >= max(1, int(len(combos) * robust_ratio))),
+        })
+    return rows
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="因子 IC 显著性分析")
     ap.add_argument("--symbols", default="", help="逗号分隔(默认内置 24 只)")
@@ -316,6 +424,21 @@ def main() -> int:
         type=int,
         default=0,
         help="分段稳健性分析: 切成 N 段各自检验(0=不做, 默认 0)",
+    )
+    ap.add_argument(
+        "--scan",
+        action="store_true",
+        help="参数扫描: 多预测期 × 多起点(验证'无 alpha'是否为假阴性)",
+    )
+    ap.add_argument(
+        "--horizons",
+        default="1,5,10,20",
+        help="扫描用预测期(逗号分隔)",
+    )
+    ap.add_argument(
+        "--scan-starts",
+        default="20240101,20250101",
+        help="扫描用时间起点(逗号分隔)",
     )
     args = ap.parse_args()
 
@@ -328,7 +451,7 @@ def main() -> int:
     print(f"标的 {len(symbols)} 只 | 起始 {args.start} | 预测未来 {FORWARD_DAYS} 日")
     print(f"样本量门槛: {args.min_symbols}\n")
 
-    panel = build_panel(symbols, args.start)
+    panel, closes = build_panel(symbols, args.start)
     print(f"有效标的: {len(panel)}/{len(symbols)}")
     print(f"因子数  : {len(default_registry().list())}\n")
 
@@ -342,6 +465,37 @@ def main() -> int:
         if isinstance(v, float) and np.isnan(v):
             return "n/a".rjust(width)
         return f"{v:+.{prec}f}".rjust(width)
+
+    if args.scan:
+        horizons = tuple(int(x) for x in args.horizons.split(",") if x.strip())
+        starts = tuple(s.strip() for s in args.scan_starts.split(",") if s.strip())
+        print(f"=== 参数扫描(预测期 {horizons} × 起点 {starts}) ===\n")
+        try:
+            scan_rows = scan_and_summarize(
+                panel, horizons=horizons, starts=starts,
+                min_symbols=args.min_symbols,
+                recompute_fwd=True, closes=closes,
+            )
+        except ValueError as e:
+            print(f"拒绝出结论: {e}")
+            return 1
+        head = f"{'因子':<16}{'各组合IC':<38}{'显著':>6}{'一致':>6}{'稳健':>7}"
+        print(head)
+        print("-" * len(head))
+        for r in sorted(
+            scan_rows,
+            key=lambda x: (x["robust"],
+                           abs(x["ic_mean_all"]) if not np.isnan(x["ic_mean_all"]) else 0),
+            reverse=True,
+        ):
+            ics_s = " ".join(f"{x:+.3f}" for x in r["ic_by_combo"]) or "n/a"
+            print(
+                f"{r['factor']:<16}{ics_s:<38}{r['n_significant']:>6}"
+                f"{'是' if r['consistent_direction'] else '否':>6}"
+                f"{'★' if r['robust'] else '×':>7}"
+            )
+        print(f"\n  稳健判据: 方向一致 且 显著组合数 >= 一半({len(horizons) * len(starts) // 2})")
+        print("  目的: 排除'只测单一预测期导致的假阴性'。\n")
 
     if args.segments > 0:
         print(f"=== 分段稳健性({args.segments} 段) ===\n")
