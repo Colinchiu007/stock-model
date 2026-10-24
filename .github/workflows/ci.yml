@@ -23,7 +23,11 @@ jobs:
       - name: Install dev dependencies
         run: |
           pip install --upgrade pip
-          pip install ruff mypy
+          # ruff **必须锁版本**: 不锁则 CI 每次装最新, 本地是另一版本 ->
+          # 两边规则不同, 出现"本地全绿、CI 报错"的反复返工。
+          # 实测(2026-10-24): 本地 0.17.1 漏过 F841(未用变量), CI 装 0.17.2 抓到。
+          # 升级 ruff 请同时改这里与本地环境, 并跑一次全量门禁。
+          pip install "ruff==0.17.2" mypy
           # mypy 必须**看到依赖**才能真的检查代码: 缺依赖时它只会报一堆
           # "Cannot find implementation or library stub", 看着跑了其实没查。
           # 这里装上与主测试 job 一致的一组(rl / ta 两个 extra 除外 ——
